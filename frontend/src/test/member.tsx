@@ -1,4 +1,5 @@
 import { MemoryRouter, Route, Routes } from 'react-router';
+import { Settings } from '../features/settings/Settings';
 import { Member } from '../pages/Member';
 import { usePersonas, type Persona } from '../stores/personas';
 
@@ -29,6 +30,7 @@ export function MemberAt({ path = '/team/twin/default' }: { path?: string }) {
         <Route path="team" element={<p>团队页</p>} />
         <Route path="chat" element={<p>聊天页</p>} />
       </Routes>
+      <Settings />
     </MemoryRouter>
   );
 }

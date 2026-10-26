@@ -675,7 +675,7 @@ it.each([true, false])(
     expect(line).toHaveTextContent('升级前沿用旧档案');
     await userEvent.click(go!);
     expect(await screen.findByLabelText('地址')).toHaveTextContent(
-      'system=upgrades',
+      'settings=memory',
     );
     useAuth.setState({ identity: null });
   },

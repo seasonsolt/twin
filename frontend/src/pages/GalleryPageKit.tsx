@@ -6,6 +6,7 @@ import {
   KeyRound,
   LogOut,
   Mic,
+  Palette,
   Pencil,
   Plus,
   Settings2,
@@ -895,10 +896,10 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
                 [
                   {
                     key: 'system',
-                    label: '系统设置',
+                    label: '设置',
                     icon: Settings2,
                     alert: '1 项服务异常',
-                    onSelect: () => toast('打开系统设置'),
+                    onSelect: () => toast('打开设置'),
                   },
                 ],
                 [
@@ -973,7 +974,7 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
       <Card className="space-y-4">
         <Heading level={3}>设置弹窗 SettingsDialog</Heading>
         <Text size="sm" tone="secondary">
-          次要任务盖在当前页面上打开，关闭后回到原处；左侧菜单分组，异常只用一个红点提示。
+          次要任务盖在当前页面上打开，关闭后回到原处；左侧菜单按对象分组，异常只用一个红点提示；详情页（under）不进菜单，标题旁有返回。
         </Text>
         <Row gap={2}>
           <Button
@@ -1010,32 +1011,37 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
         <SettingsDialog
           open={settings}
           onOpenChange={setSettings}
-          title="系统"
-          note="仅管理员可见"
+          title="设置"
           active={section}
           onSelect={setSection}
           sections={[
+            { key: 'look', label: '外观', group: '我', icon: Palette },
+            {
+              key: 'tokens',
+              label: '模型与额度',
+              group: '团队',
+              icon: KeyRound,
+            },
             {
               key: 'monitor',
-              label: '监控',
+              label: '状态',
+              group: '系统',
               icon: Activity,
               status: { label: '1 项异常', tone: 'danger' },
             },
-            {
-              key: 'tts',
-              label: '朗读服务',
-              group: '服务',
-              status: { label: '已关闭' },
-            },
-            {
-              key: 'tokens',
-              label: '模型与 Token',
-              group: '设置',
-              icon: KeyRound,
-            },
+            { key: 'tts', label: 'TTS 朗读', under: 'monitor' },
           ]}
         >
-          <Text>当前分区：{section}</Text>
+          <Stack gap={3}>
+            <Text>当前分区：{section}</Text>
+            {section === 'monitor' && (
+              <Row gap={2}>
+                <Button variant="secondary" onClick={() => setSection('tts')}>
+                  打开 TTS 朗读（详情页）
+                </Button>
+              </Row>
+            )}
+          </Stack>
         </SettingsDialog>
       </Card>
 

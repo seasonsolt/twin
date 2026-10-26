@@ -197,40 +197,35 @@ const pages: {
   // 第 4 屏: the twins deleted in the last days, to bring back.
   { name: 'team-deleted', path: '/#/team?tab=trash', ready: '旧版助手' },
   { name: 'work', path: '/#/work', ready: '按我的口吻写一份本周周报' },
+  // The settings, over the team page: one dialog, grouped by what each setting is about.
   {
-    name: 'system',
-    path: '/#/team?system=monitor',
-    ready: 'GPU 机器上的服务',
+    name: 'settings-status',
+    path: '/#/team?settings=status',
+    ready: '经隧道访问的服务每',
     viewport: true,
   },
   {
-    name: 'system-tokens',
-    path: '/#/team?system=tokens',
+    name: 'settings-models',
+    path: '/#/team?settings=models',
     ready: 'TWIN_LLM_KEY',
     viewport: true,
   },
   // The team's name, for the side bar and the way in.
   {
-    name: 'system-team',
-    path: '/#/team?system=team',
+    name: 'settings-team',
+    path: '/#/team?settings=team',
     ready: '团队名',
     viewport: true,
   },
   {
-    name: 'system-params',
-    path: '/#/team?system=params',
+    name: 'settings-library',
+    path: '/#/team?settings=library',
     ready: '每人排队转写上限（条）',
     viewport: true,
   },
   {
-    name: 'system-library',
-    path: '/#/team?system=library',
-    ready: '排队转写',
-    viewport: true,
-  },
-  {
-    name: 'system-upgrades',
-    path: '/#/team?system=upgrades',
+    name: 'settings-memory',
+    path: '/#/team?settings=memory',
     ready: '全部升级（1 个分身）',
     viewport: true,
   },

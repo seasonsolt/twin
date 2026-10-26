@@ -3,7 +3,7 @@ import { Navigate, useLocation, useNavigate, useOutlet } from 'react-router';
 import { usePersonaId, usePersonaState } from '../../lib/usePersonaState';
 import { startStatusPolling, useStatus } from '../../stores/status';
 import { startSystemPolling } from '../../stores/system';
-import { SystemDialog } from '../../features/admin/SystemDialog';
+import { Settings } from '../../features/settings/Settings';
 import {
   Card,
   Heading,
@@ -254,7 +254,7 @@ export function AppShell() {
         </main>
       </div>
       {mobile && !twinLevel && <BottomTabs />}
-      {admin && <SystemDialog />}
+      <Settings />
       {canManage && !mobile && <GlobalDrop />}
       <NewTwinHost />
     </div>

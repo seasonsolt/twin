@@ -44,7 +44,7 @@ import { usePersonas } from '../stores/personas';
 import { useAuth } from '../stores/auth';
 import { MediaClaim } from '../features/sources/MediaClaim';
 import { TranscriptClaim } from '../features/sources/TranscriptClaim';
-import { useOpenSystem } from '../features/admin/SystemDialog';
+import { useOpenSettings } from '../features/settings/Settings';
 import { kernelLabel } from '../features/admin/Upgrades';
 
 const MAX_FOLDER_UPLOAD_BYTES = 500 * 1024 * 1024;
@@ -235,7 +235,7 @@ function KernelLine({
   processing: Processing;
   admin: boolean;
 }) {
-  const openSystem = useOpenSystem();
+  const openSettings = useOpenSettings();
   const from = kernel.built ? kernelLabel(kernel.built) : '旧版';
   if (processing.state !== 'idle')
     return (
@@ -252,7 +252,7 @@ function KernelLine({
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => openSystem('upgrades')}
+          onClick={() => openSettings('memory')}
         >
           去设置里升级
         </Button>

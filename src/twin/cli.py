@@ -79,7 +79,7 @@ max_workers = 4
 # [kernel]
 # auto_rebuild = true
 # max_auto_rebuild_chunks = 400
-# max_concurrent = 4  # 整理记忆时同时发给模型的请求数，默认同 max_workers；也可在系统设置里随时调整
+# max_concurrent = 4  # 整理记忆时同时发给模型的请求数，默认同 max_workers；也可在网页的设置里随时调整
 
 [media]
 # font_path = "/path/to/chinese-font.ttc" # 视频导出；留空自动查找系统中文字体
@@ -116,7 +116,7 @@ api_key_env = "TWIN_LLM_KEY"
 # api_key_env = "TWIN_LLM_FALLBACK_KEY"
 # json_mode = "json_object"
 # extra_body = { thinking = { type = "disabled" } }
-# max_concurrent = 4  # 同时发给备选模型的请求数，超出的排队；也可在系统设置里随时调整
+# max_concurrent = 4  # 同时发给备选模型的请求数，超出的排队；也可在网页的设置里随时调整
 
 [embed]
 # egress = "local" 或 "external"：hashing 默认为本机；外部向量服务按配置使用。

@@ -251,7 +251,10 @@ it('opens on the 档案 of the twin its address names, with the way to talk to i
     'true',
   );
   // The old buttons are gone from the page: editing and the settings are under “⋯”.
-  expect(screen.queryByRole('button', { name: '设置' })).toBeNull();
+  const page = within(screen.getByRole('main'));
+  expect(
+    page.getByRole('button', { name: '设置' }).closest('details'),
+  ).not.toBeNull();
   expect(screen.queryByRole('button', { name: '删除这个分身' })).toBeNull();
   expect(screen.queryByText('企业微信')).toBeNull();
   expect(screen.queryByText('预置音色')).toBeNull();
@@ -277,8 +280,9 @@ it('keeps the names the twin goes by in the settings, opened from “⋯”', as
   render(<App />);
   const user = userEvent.setup();
   await screen.findByRole('heading', { level: 1, name: '朋友' });
-  await choose(user, '别名');
-  const settings = await screen.findByRole('dialog', { name: '分身设置' });
+  await choose(user, '设置');
+  const settings = await screen.findByRole('dialog', { name: '设置' });
+  await user.click(within(settings).getByRole('button', { name: /^别名/ }));
   expect(
     await within(settings).findByRole('button', { name: '删除称呼 林总' }),
   ).toBeInTheDocument();
@@ -341,7 +345,7 @@ it.each([
       ).toBeVisible();
     }
     if (section === 'channels') {
-      const settings = await screen.findByRole('dialog', { name: '分身设置' });
+      const settings = await screen.findByRole('dialog', { name: '设置' });
       await waitFor(() =>
         expect(
           within(settings).getByRole('button', { name: '绑定' }),
@@ -349,7 +353,7 @@ it.each([
       );
       await waitFor(() =>
         expect(window.location.hash).toBe(
-          '#/team/twin/friend?section=overview',
+          '#/team/twin/friend?settings=channels',
         ),
       );
     }
@@ -367,7 +371,7 @@ it('mounts polling components only in their selected panel and aborts them when 
   ).toBe(false);
   const nav = screen.getByRole('tablist', { name: '档案章节' });
   const user = userEvent.setup();
-  await choose(user, '接入');
+  await choose(user, '设置');
   await waitFor(() =>
     expect(fetcher.mock.calls.some(([path]) => path === '/api/channels')).toBe(
       true,
@@ -376,8 +380,8 @@ it('mounts polling components only in their selected panel and aborts them when 
   const channelRequest = fetcher.mock.calls.find(
     ([path]) => path === '/api/channels',
   )![1]!;
-  const settings = screen.getByRole('dialog', { name: '分身设置' });
-  await user.click(within(settings).getByRole('button', { name: '外部服务' }));
+  const settings = screen.getByRole('dialog', { name: '设置' });
+  await user.click(within(settings).getByRole('button', { name: /^数据去向/ }));
   expect(channelRequest.signal?.aborted).toBe(true);
   await user.keyboard('{Escape}');
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
@@ -432,8 +436,8 @@ it('protects the default twin: nothing to delete in its menu or its settings', a
   const user = userEvent.setup();
   await user.click(await more('本人'));
   expect(screen.queryByRole('button', { name: '删除分身' })).toBeNull();
-  await user.click(screen.getByRole('button', { name: '别名' }));
-  const settings = await screen.findByRole('dialog', { name: '分身设置' });
+  await user.click(screen.getByRole('button', { name: '设置' }));
+  const settings = await screen.findByRole('dialog', { name: '设置' });
   expect(
     within(settings).queryByRole('button', { name: '删除分身' }),
   ).toBeNull();

@@ -101,10 +101,13 @@ it('keeps only name/AI label in the header and describes external hosts only on 
     await act(async () =>
       screen.getByLabelText('身份测试人的更多操作').click(),
     );
+    await act(async () => screen.getByRole('button', { name: '设置' }).click());
+    const settings = await screen.findByRole('dialog', { name: '设置' });
     await act(async () =>
-      screen.getByRole('button', { name: '外部服务' }).click(),
+      within(settings)
+        .getByRole('button', { name: /^数据去向/ })
+        .click(),
     );
-    const settings = await screen.findByRole('dialog', { name: '分身设置' });
     // The dialog fades in from opacity 0, even with reduced motion.
     await waitFor(() => expect(settings).toBeVisible());
     expect(
@@ -114,7 +117,7 @@ it('keeps only name/AI label in the header and describes external hosts only on 
       within(settings).getAllByRole('button', { name: '关闭' })[0].click(),
     );
     await waitFor(() =>
-      expect(screen.queryByRole('dialog', { name: '分身设置' })).toBeNull(),
+      expect(screen.queryByRole('dialog', { name: '设置' })).toBeNull(),
     );
     expect(
       screen.queryByText(/外部 ·|remote-provider/),

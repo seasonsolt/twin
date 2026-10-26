@@ -217,7 +217,7 @@ export const useSystem = create<{
     try {
       const components = await api<Components>('/api/admin/system/components');
       if (!components?.kernel || !components.ledger)
-        throw new Error('服务器版本不支持部件升级');
+        throw new Error('服务器版本不支持在这里升级记忆');
       set({ components, componentsError: '' });
     } catch (failure) {
       set({

@@ -122,8 +122,9 @@ const setup = () => {
 // External services are a setting of the twin, out of the way of its persona.
 async function openServices() {
   fireEvent.click(await screen.findByLabelText(`${identity.name}的更多操作`));
-  fireEvent.click(screen.getByRole('button', { name: '外部服务' }));
-  const settings = await screen.findByRole('dialog', { name: '分身设置' });
+  fireEvent.click(screen.getByRole('button', { name: '设置' }));
+  const settings = await screen.findByRole('dialog', { name: '设置' });
+  fireEvent.click(within(settings).getByRole('button', { name: /^数据去向/ }));
   // The dialog fades in from opacity 0, even with reduced motion.
   await waitFor(() => expect(settings).toBeVisible());
   return settings;

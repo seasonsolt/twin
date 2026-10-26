@@ -82,10 +82,7 @@ def release(remote: str, requested: str, fetch_builds: FetchBuilds) -> None:
     old = kernel_versions(stable)
     if old != new:
         print(f"记忆内核变化：{old} → {new}")
-        print(
-            "同事下次启动会按新内核重新整理记忆（超过费用闸需管理员在系统设置的“部件升级”里确认；"
-            "整理前自动快照，可回退）。"
-        )
+        print("同事下次启动会按新内核重新整理记忆（超过费用闸需管理员在设置的“记忆”里确认；整理前自动快照，可回退）。")
     else:
         print("记忆内核版本不变：同事的记忆不会重新整理。")
     # A plain push only fast-forwards: if stable moved since the fetch, the server refuses it.

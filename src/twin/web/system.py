@@ -86,7 +86,7 @@ PARAMS: dict[str, Param] = {
         "kernel",
         "auto_rebuild",
         "自动升级记忆内核",
-        "新版本发布后，启动时自动按新内核重新整理记忆；关闭后在“部件升级”里手动升级。",
+        "新版本发布后，启动时自动按新内核重新整理记忆；关闭后在设置的“记忆”里手动升级。",
     ),
     "kernel.max_auto_rebuild_chunks": Param(
         "kernel",

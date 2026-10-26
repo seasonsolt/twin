@@ -301,7 +301,12 @@ it('shows the full signed-in email in the account popover and logs out', async (
   expect(menu).toHaveAttribute('data-side', 'right');
   expect(menu).toHaveAttribute('data-align', 'end');
   expect(within(menu).queryByRole('button', { name: /关闭/ })).toBeNull();
-  expect(within(menu).getAllByRole('button')).toHaveLength(1);
+  // Everyone has the settings (their own, and the twin they look after) beside signing out.
+  expect(
+    within(menu)
+      .getAllByRole('button')
+      .map((button) => button.textContent),
+  ).toEqual(['设置', '退出登录']);
   await user.keyboard('{Escape}');
   await waitFor(() =>
     expect(screen.queryByRole('dialog', { name: '账户' })).toBeNull(),

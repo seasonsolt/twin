@@ -123,27 +123,45 @@ export function ParamField({ param }: { param: ParamState }) {
   );
 }
 
-/** The parameters that are not about one part: the recording library's limits. */
-export function Params({ state }: { state: SystemState }) {
+/** The recording library's rules: the limits an administrator can change here, and the versions of the rules that
+ * settle speakers and clean segments on their own. */
+export function LibraryRules({ state }: { state: SystemState }) {
   const params = state.params?.filter((p) => p.key.startsWith('library.'));
+  const components = useSystem((s) => s.components);
   return (
-    <Section
-      level={4}
-      title="录音库"
-      description="改完立即生效，所有分身一起；其他参数在 twin.toml 里改，重启后生效。"
-    >
-      {params ? (
-        <Stack gap={6}>
-          {params.map((param) => (
-            <ParamField key={param.key} param={param} />
-          ))}
-        </Stack>
-      ) : (
-        <Text size="sm" tone="secondary">
-          服务器版本不支持在这里修改参数。
-        </Text>
+    <Stack gap={6}>
+      <Section
+        level={4}
+        title="规则"
+        description="改完立即生效，所有分身一起。"
+      >
+        {params ? (
+          <Stack gap={6}>
+            {params.map((param) => (
+              <ParamField key={param.key} param={param} />
+            ))}
+          </Stack>
+        ) : (
+          <Text size="sm" tone="secondary">
+            服务器版本不支持在这里修改参数。
+          </Text>
+        )}
+      </Section>
+      {components && (
+        <Section
+          level={4}
+          title="自动判定的版本"
+          description="新版本发布后，启动时自动按新规则重判旧规则做出的自动决定；人做的决定不受影响。"
+        >
+          <KeyValue
+            items={[
+              ['说话人自动归属', components.library.attribution],
+              ['片段复核', components.library.cleanup],
+            ]}
+          />
+        </Section>
       )}
-    </Section>
+    </Stack>
   );
 }
 
@@ -170,8 +188,8 @@ function kernelBuilt(twin: KernelStatus) {
   return twin.scope === 'none' ? '还没有记忆' : '旧版';
 }
 
-/** The parts a release may raise the version of: what each twin was built on, and upgrading one twin or all. */
-export function Upgrades({ state }: { state: SystemState }) {
+/** Each twin's memory: the kernel it was built on and its ledger, upgrading one twin or all, and the kernel's limits. */
+export function MemoryPane({ state }: { state: SystemState }) {
   const components = useSystem((s) => s.components);
   const loadError = useSystem((s) => s.componentsError);
   const load = useSystem((s) => s.loadComponents);
@@ -243,18 +261,6 @@ export function Upgrades({ state }: { state: SystemState }) {
           run(ids ? `ledger:${ids[0]}` : 'ledger', 'ledger', ids)
         }
       />
-      <Section
-        level={4}
-        title="录音库规则"
-        description="新版本发布后，启动时自动按新规则重判旧规则做出的自动决定，结果不变的只改版本；人做的决定不受影响。转写服务换版本后，录音库会标出可以重新转写的录音，由成员决定。"
-      >
-        <KeyValue
-          items={[
-            ['说话人自动归属', components.library.attribution],
-            ['片段复核', components.library.cleanup],
-          ]}
-        />
-      </Section>
     </Stack>
   );
 }

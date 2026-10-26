@@ -1,6 +1,6 @@
 import * as RadixDialog from '@radix-ui/react-dialog';
 import { AnimatePresence, motion, type Transition } from 'motion/react';
-import { X } from 'lucide-react';
+import { ChevronLeft, X } from 'lucide-react';
 import {
   createContext,
   useContext,
@@ -256,6 +256,9 @@ export interface SettingsSection {
   icon?: ComponentType<{ className?: string; 'aria-hidden'?: boolean }>;
   /** A short state after the label, such as 异常 or 已关闭. Only danger draws the eye (a dot); the rest stay quiet. */
   status?: { label: string; tone?: Tone };
+  /** A detail page opened from that section's page: left out of the menu, which keeps that section marked while it
+   * is open, and the heading gets a way back to it. */
+  under?: string;
 }
 
 /**
@@ -290,6 +293,9 @@ export function SettingsDialog({
   const { reduced, transition } = useMotionPreset('gentle');
   const exit = { ...crossfade, duration: exitDurations.dialog };
   const current = sections.find((section) => section.key === active);
+  const parent =
+    current?.under && sections.find((section) => section.key === current.under);
+  const marked = parent ? parent.key : active;
   const menu = useRef<HTMLUListElement>(null);
   // On phones the menu is a scrolling row: keep the open section's chip in view.
   // Positions come from layout (offsetLeft), not the screen, so the opening scale does not throw them off; again
@@ -357,7 +363,7 @@ export function SettingsDialog({
               >
                 <nav
                   aria-label={title}
-                  className="flex shrink-0 flex-col border-b border-border bg-canvas md:w-[224px] md:border-r md:border-b-0 md:px-3 md:py-5"
+                  className="flex shrink-0 flex-col border-b border-border bg-canvas md:w-[224px] md:overflow-y-auto md:border-r md:border-b-0 md:px-3 md:py-5"
                 >
                   <div className="flex items-center justify-between gap-3 px-4 pt-4 md:block md:px-3 md:pt-0">
                     <div>
@@ -376,56 +382,66 @@ export function SettingsDialog({
                     ref={menu}
                     className="flex gap-1 overflow-x-auto px-3 py-3 md:mt-4 md:flex-col md:overflow-visible md:p-0"
                   >
-                    {sections.map((section) => {
-                      const selected = section.key === active;
-                      const Icon = section.icon;
-                      return (
-                        <li key={section.key} className="shrink-0">
-                          {section.group && (
-                            <p className="hidden px-3 pt-4 pb-1.5 text-xs text-tertiary md:block">
-                              {section.group}
-                            </p>
-                          )}
-                          <button
-                            type="button"
-                            aria-current={selected ? 'page' : undefined}
-                            onClick={() => onSelect(section.key)}
-                            className={cn(
-                              'flex min-h-11 w-full items-center gap-2.5 rounded-full px-3 text-left text-base whitespace-nowrap transition-colors hover:bg-soft focus-visible:outline-2 focus-visible:outline-accent md:min-h-10 md:rounded-sm',
-                              selected &&
-                                'bg-surface font-medium shadow-elevation-1 hover:bg-surface',
+                    {sections
+                      .filter((section) => !section.under)
+                      .map((section) => {
+                        const selected = section.key === marked;
+                        const Icon = section.icon;
+                        return (
+                          <li key={section.key} className="shrink-0">
+                            {section.group && (
+                              <p className="hidden px-3 pt-4 pb-1.5 text-xs text-tertiary md:block">
+                                {section.group}
+                              </p>
                             )}
-                          >
-                            {Icon && (
-                              <Icon aria-hidden className="size-4 shrink-0" />
-                            )}
-                            {section.label}
-                            {section.status && (
-                              <span
-                                className={cn(
-                                  'ml-auto flex items-center gap-1.5 pl-2 text-xs',
-                                  section.status.tone === 'danger'
-                                    ? 'text-danger'
-                                    : 'text-tertiary',
-                                )}
-                              >
-                                {section.status.tone === 'danger' && (
-                                  <span
-                                    aria-hidden
-                                    className="size-1.5 rounded-full bg-danger"
-                                  />
-                                )}
-                                {section.status.label}
-                              </span>
-                            )}
-                          </button>
-                        </li>
-                      );
-                    })}
+                            <button
+                              type="button"
+                              aria-current={selected ? 'page' : undefined}
+                              onClick={() => onSelect(section.key)}
+                              className={cn(
+                                'flex min-h-11 w-full items-center gap-2.5 rounded-full px-3 text-left text-base whitespace-nowrap transition-colors hover:bg-soft focus-visible:outline-2 focus-visible:outline-accent md:min-h-10 md:rounded-sm',
+                                selected &&
+                                  'bg-surface font-medium shadow-elevation-1 hover:bg-surface',
+                              )}
+                            >
+                              {Icon && (
+                                <Icon aria-hidden className="size-4 shrink-0" />
+                              )}
+                              {section.label}
+                              {section.status && (
+                                <span
+                                  className={cn(
+                                    'ml-auto flex items-center gap-1.5 pl-2 text-xs',
+                                    section.status.tone === 'danger'
+                                      ? 'text-danger'
+                                      : 'text-tertiary',
+                                  )}
+                                >
+                                  {section.status.tone === 'danger' && (
+                                    <span
+                                      aria-hidden
+                                      className="size-1.5 rounded-full bg-danger"
+                                    />
+                                  )}
+                                  {section.status.label}
+                                </span>
+                              )}
+                            </button>
+                          </li>
+                        );
+                      })}
                   </ul>
                 </nav>
                 <section className="flex min-h-0 min-w-0 flex-1 flex-col">
                   <header className="flex items-center gap-3 border-b border-border px-4 py-3 md:px-7 md:py-4">
+                    {parent && (
+                      <IconButton
+                        label={`返回${parent.label}`}
+                        onClick={() => onSelect(parent.key)}
+                      >
+                        <ChevronLeft className="size-5" />
+                      </IconButton>
+                    )}
                     <h3 className="min-w-0 flex-1 truncate text-xl font-semibold">
                       {current?.label}
                     </h3>

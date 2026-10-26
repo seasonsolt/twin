@@ -22,7 +22,7 @@ import { useManagesCurrent } from '../../stores/access';
 import { usePersonas, type Persona } from '../../stores/personas';
 import { useAuth } from '../../stores/auth';
 import { useMobile } from '../../lib/useMobile';
-import { useOpenSystem } from '../../features/admin/SystemDialog';
+import { useOpenSettings } from '../../features/settings/Settings';
 import { PresetSvg } from '../../features/avatar/presets';
 import { useNewTwinCard } from './NewTwin';
 
@@ -95,7 +95,7 @@ export function PersonaSwitcher({
   const current = items.find((item) => item.id === id);
   const identity = useAuth((state) => state.identity);
   const canManage = useManagesCurrent();
-  const openSystem = useOpenSystem();
+  const openSettings = useOpenSettings();
   useEffect(() => {
     if (!open) return;
     void refresh().catch((failure: unknown) =>
@@ -262,17 +262,15 @@ export function PersonaSwitcher({
             >
               ＋ 新建分身
             </TextLink>
-            {identity?.admin && (
-              <TextLink
-                onClick={() => {
-                  navigating.current = true;
-                  setOpen(false);
-                  openSystem();
-                }}
-              >
-                系统
-              </TextLink>
-            )}
+            <TextLink
+              onClick={() => {
+                navigating.current = true;
+                setOpen(false);
+                openSettings();
+              }}
+            >
+              设置
+            </TextLink>
           </Row>
           {error && (
             <Text role="alert" tone="danger">

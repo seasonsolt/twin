@@ -36,7 +36,7 @@ import { AssetsTab } from '../features/profile/AssetsTab';
 import { EditIdentityDialog } from '../features/profile/EditIdentityDialog';
 import { MemoriesTab, type MemoryView } from '../features/profile/MemoriesTab';
 import { OverviewTab } from '../features/profile/OverviewTab';
-import { PersonaSettings } from '../features/profile/PersonaSettings';
+import { useOpenSettings } from '../features/settings/Settings';
 import { deletable, useDeleteTwin } from '../features/profile/useDeleteTwin';
 import { Ledger } from './Ledger';
 import type { Person } from './Recording';
@@ -104,14 +104,13 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
       : asked === 'answers' && self
         ? 'answers'
         : 'list';
-  const [settings, setSettings] = useState<string | null>(null);
+  const openSettings = useOpenSettings();
   const [editing, setEditing] = usePersonaState(false);
-  // An old link to the channels opens them over the page, then reads as the page's own link, so closing the dialog
-  // and going back and forward behave like any other dialog.
+  // An old link to the channels opens them in the settings over the page, so closing the dialog and going back and
+  // forward behave like any other dialog.
   useEffect(() => {
     if (requested !== 'channels') return;
-    setSettings('channels');
-    setParams({ section: 'overview' }, { replace: true });
+    setParams({ settings: 'channels' }, { replace: true });
   }, [requested, setParams]);
   useEffect(() => {
     window.scrollTo({ top: 0 });
@@ -162,12 +161,7 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
                         { replace: true },
                       ),
                   },
-                  { label: '接入', onSelect: () => setSettings('channels') },
-                  { label: '别名', onSelect: () => setSettings('aliases') },
-                  {
-                    label: '外部服务',
-                    onSelect: () => setSettings('services'),
-                  },
+                  { label: '设置', onSelect: () => openSettings('channels') },
                   {
                     label: twin.public ? '设为私有' : '设为公开',
                     onSelect: () => void togglePublic(),
@@ -318,18 +312,11 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
           />
         )}
         {canManage && (
-          <>
-            <PersonaSettings
-              section={settings}
-              onSection={setSettings}
-              name={name}
-            />
-            <EditIdentityDialog
-              open={editing}
-              onOpenChange={setEditing}
-              identity={identity}
-            />
-          </>
+          <EditIdentityDialog
+            open={editing}
+            onOpenChange={setEditing}
+            identity={identity}
+          />
         )}
       </Page>
     </div>

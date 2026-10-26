@@ -1,0 +1,1014 @@
+import { useEffect, useState, type FormEvent } from 'react';
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  Field,
+  HistoryBar,
+  Input,
+  KeyValue,
+  Meter,
+  Notice,
+  Row,
+  Section,
+  Select,
+  Stack,
+  StatusDot,
+  Switch,
+  Table,
+  Text,
+  type Tone,
+} from '../../components/ui';
+import {
+  clock,
+  failing,
+  useSystem,
+  type AuditEntry,
+  type EditableModel,
+  type ServiceCheck,
+  type ServiceState,
+  type SwitchName,
+  type SystemState,
+  type UsageRow,
+} from '../../stores/system';
+import { setFeatures } from '../../stores/auth';
+import { ParamField } from './Upgrades';
+import { TeamName } from './TeamName';
+
+/** The parts of the system the status page lists, each with a page of its own under it. */
+export type ServiceKey = 'gpu' | 'embed' | 'asr' | 'tts' | 'video';
+
+export const SERVICES: { key: ServiceKey; label: string }[] = [
+  { key: 'gpu', label: 'GPU 机器' },
+  { key: 'embed', label: '向量服务' },
+  { key: 'asr', label: 'ASR 转写' },
+  { key: 'tts', label: 'TTS 朗读' },
+  { key: 'video', label: '视频服务' },
+];
+
+function span(seconds: number) {
+  if (seconds < 3600) return `${Math.max(1, Math.round(seconds / 60))} 分钟`;
+  if (seconds < 86400) return `${Math.round(seconds / 3600)} 小时`;
+  return `${Math.round(seconds / 86400)} 天`;
+}
+
+const percent = (value: number) =>
+  `${value === 1 ? '100' : (Math.floor(value * 1000) / 10).toFixed(1)}%`;
+
+function details(check: ServiceCheck) {
+  return [
+    check.version && `版本 ${check.version}`,
+    check.device,
+    check.model,
+    check.busy === true ? '正在处理任务' : check.busy === false ? '空闲' : null,
+    check.latency_ms !== null && `响应 ${check.latency_ms} ms`,
+    check.embeddings_ms !== null && `向量 ${check.embeddings_ms} ms`,
+  ].filter(Boolean);
+}
+
+const tokens = (n: number) =>
+  n >= 10_000 ? `${(n / 10_000).toFixed(n % 10_000 ? 1 : 0)} 万` : String(n);
+
+function historyTone(bucket: { checks: number; failures: number }) {
+  if (bucket.checks === 0) return 'none' as const;
+  if (bucket.failures === 0) return 'success' as const;
+  return bucket.failures === bucket.checks
+    ? ('danger' as const)
+    : ('warning' as const);
+}
+
+function ServiceHistory({ service }: { service: ServiceState }) {
+  return (
+    <HistoryBar
+      label={`${service.name}每小时检查结果`}
+      slots={service.buckets.map((bucket) => ({
+        key: bucket.start,
+        title: `${clock(bucket.start)} 起：${bucket.checks} 次检查，${bucket.failures} 次失败`,
+        tone: historyTone(bucket),
+      }))}
+    />
+  );
+}
+
+function StateText({ service }: { service: ServiceState }) {
+  const { latest } = service;
+  if (!service.enabled)
+    return (
+      <Text as="span" size="sm" tone="tertiary">
+        已关闭，不检查
+      </Text>
+    );
+  if (!latest)
+    return (
+      <Text as="span" size="sm" tone="tertiary">
+        尚未检查
+      </Text>
+    );
+  return latest.ok ? (
+    <Text as="span" size="sm" tone="success">
+      正常
+    </Text>
+  ) : (
+    <Text as="span" size="sm" tone="danger">
+      异常
+    </Text>
+  );
+}
+
+/** The monitor's full record of one service: state now, the last day, and the last failure. */
+function ServiceRecord({
+  service,
+  now,
+}: {
+  service: ServiceState;
+  now: number;
+}) {
+  const { latest } = service;
+  const covered = service.first_at === null ? 0 : now - service.first_at;
+  return (
+    <Stack gap={2}>
+      <Row gap={2} wrap>
+        <StateText service={service} />
+        <Text as="span" size="sm" tone="secondary">
+          {service.address}
+        </Text>
+      </Row>
+      {service.enabled && latest && !latest.ok && (
+        <Text role="alert" size="sm" tone="danger">
+          {latest.reason ?? '无法访问服务'}
+          {service.since !== null &&
+            service.since < latest.at &&
+            `（自 ${clock(service.since)} 起）`}
+        </Text>
+      )}
+      {latest && details(latest).length > 0 && (
+        <Text size="sm" tone="secondary">
+          {details(latest).join(' · ')}
+        </Text>
+      )}
+      {service.availability !== null && (
+        <Text size="sm">
+          最近 {span(covered)}可用率 {percent(service.availability)}（
+          {service.checks} 次检查，{service.failures} 次失败）
+        </Text>
+      )}
+      {service.last_failure && (
+        <Text size="sm" tone="secondary">
+          最近一次失败 {clock(service.last_failure.at)}：
+          {service.last_failure.reason ?? '无法访问服务'}
+        </Text>
+      )}
+      <ServiceHistory service={service} />
+    </Stack>
+  );
+}
+
+function QuotaMeter({ quota }: { quota: SystemState['quota'] }) {
+  if (!quota.limit)
+    return (
+      <Text size="sm" tone="secondary">
+        你最近 {quota.hours} 小时用了 {tokens(quota.used)} token，不设上限。
+      </Text>
+    );
+  return (
+    <Stack gap={1}>
+      <Meter
+        label={`你最近 ${quota.hours} 小时的 token 用量`}
+        value={Math.min(quota.used, quota.limit)}
+        max={quota.limit}
+      />
+      <Text size="xs" tone={quota.exhausted ? 'danger' : 'tertiary'}>
+        {tokens(quota.used)} / {tokens(quota.limit)}
+        {quota.exhausted &&
+          quota.resets_at &&
+          ` · ${clock(Date.parse(quota.resets_at) / 1000)} 起恢复`}
+      </Text>
+    </Stack>
+  );
+}
+
+const STAGES: Record<string, string> = {
+  'chat.answer': '聊天回答',
+  'chat.answer.hedge': '聊天回答 · 抢先重发',
+  'chat.rewrite': '聊天 · 理解问题',
+  'chat.derived': '聊天 · 推算日期和数量',
+  'chat.located': '聊天 · 找最新说法',
+  'chat.connected': '聊天 · 关联记录',
+  'chat.meta': '聊天 · 补回依据',
+  proofread: '录音校对',
+  'speaker.cues': '从发言辨认说话人',
+  'memory.extract': '整理记忆 · 抽取',
+  'memory.merge': '整理记忆 · 合并',
+  ledger: '承诺账本',
+  'work.route': '工作 · 判断要不要动手',
+  'work.agent': '工作模式',
+};
+
+function UsageTable({ usage }: { usage: UsageRow[] }) {
+  if (usage.length === 0)
+    return (
+      <Text size="sm" tone="secondary">
+        最近 24 小时还没有调用大模型。
+      </Text>
+    );
+  const unknown = usage.reduce((sum, row) => sum + row.unknown_calls, 0);
+  return (
+    <Stack gap={2}>
+      <Table
+        caption="最近 24 小时的 token 用量"
+        headers={['用途', '次数', '输入', '其中缓存', '输出']}
+        rows={usage.map((row) => [
+          STAGES[row.stage] ?? '其他',
+          row.failures
+            ? `${row.calls}（失败 ${row.failures}）`
+            : `${row.calls}`,
+          tokens(row.input_tokens),
+          tokens(row.cached_tokens),
+          tokens(row.output_tokens),
+        ])}
+      />
+      {unknown > 0 && (
+        <Text size="xs" tone="tertiary">
+          有 {unknown}{' '}
+          次调用没有报告用量（例如抢先重发后被关掉的那一份），实际用量比表里多。
+        </Text>
+      )}
+    </Stack>
+  );
+}
+
+/** One line for a part of the system on the status page: a dot, its name and a word for its state. */
+function serviceState(
+  key: ServiceKey,
+  state: SystemState,
+): { label: string; tone: Tone } {
+  if (key === 'gpu') {
+    const down = failing(state).length;
+    return down
+      ? { label: `${down} 项异常`, tone: 'danger' }
+      : { label: '正常', tone: 'success' };
+  }
+  const service = state.services.find((s) => s.key === key);
+  if (service) {
+    if (!service.enabled) return { label: '已关闭', tone: 'neutral' };
+    if (!service.latest) return { label: '尚未检查', tone: 'neutral' };
+    return service.latest.ok
+      ? { label: '正常', tone: 'success' }
+      : { label: '异常', tone: 'danger' };
+  }
+  if (key === 'tts' || key === 'video') {
+    const sw = state.switches[key];
+    if (!sw.configured) return { label: '未配置', tone: 'neutral' };
+    if (!sw.enabled) return { label: '已关闭', tone: 'neutral' };
+    return { label: '已开启', tone: 'success' };
+  }
+  return { label: '不做检查', tone: 'neutral' };
+}
+
+/** Every part of the system at a glance; each opens its own page. */
+function Status({
+  state,
+  onSelect,
+}: {
+  state: SystemState;
+  onSelect: (key: ServiceKey) => void;
+}) {
+  const down = failing(state);
+  const shown = SERVICES.filter(
+    (service) => service.key !== 'gpu' || state.services.length > 0,
+  );
+  return (
+    <Stack gap={6}>
+      {down.length > 0 && (
+        <Notice tone="danger" role="alert" title={`${down.length} 项服务异常`}>
+          {down.map((service) => (
+            <p key={service.key}>
+              {service.name}：{service.latest?.reason ?? '无法访问服务'}
+            </p>
+          ))}
+        </Notice>
+      )}
+      <Section
+        level={4}
+        title="服务"
+        description={`经隧道访问的服务每 ${Math.round(state.interval / 60)} 分钟检查一次，保留最近 ${span(state.window)}。`}
+      >
+        <Stack as="ul" gap={2}>
+          {shown.map(({ key, label }) => {
+            const now = serviceState(key, state);
+            const service = state.services.find((s) => s.key === key);
+            return (
+              <li key={key}>
+                <Card
+                  interactive
+                  variant="outline"
+                  padding="md"
+                  className="w-full space-y-2"
+                  onClick={() => onSelect(key)}
+                >
+                  <Row gap={2} justify="between">
+                    <Row gap={2}>
+                      <StatusDot tone={now.tone} />
+                      <Text as="span" weight="medium">
+                        {label}
+                      </Text>
+                    </Row>
+                    <Text
+                      as="span"
+                      size="sm"
+                      tone={now.tone === 'danger' ? 'danger' : 'secondary'}
+                    >
+                      {now.label}
+                    </Text>
+                  </Row>
+                  {service && <ServiceHistory service={service} />}
+                </Card>
+              </li>
+            );
+          })}
+        </Stack>
+      </Section>
+    </Stack>
+  );
+}
+
+function Gpu({
+  state,
+  onSelect,
+}: {
+  state: SystemState;
+  onSelect: (key: ServiceKey) => void;
+}) {
+  if (state.services.length === 0)
+    return (
+      <EmptyState
+        title="没有配置 GPU 服务"
+        body="在 twin.toml 里配置经隧道访问的转写、向量或朗读服务后重启，这里会显示 GPU 机器的状态。"
+      />
+    );
+  const seen = state.services.map((s) => s.latest).filter(Boolean);
+  const devices = [...new Set(seen.map((c) => c?.device).filter(Boolean))];
+  const hosts = [...new Set(state.services.map((s) => s.address))];
+  const down = failing(state);
+  return (
+    <Stack gap={6}>
+      <KeyValue
+        items={[
+          ['状态', down.length ? `${down.length} 项服务异常` : '服务正常'],
+          ['显卡', devices.length ? devices.join('、') : '服务未报告'],
+          ['地址', hosts.join('、')],
+        ]}
+      />
+      <Section level={4} title="承载的服务">
+        <Table
+          caption="GPU 机器上的服务"
+          headers={['服务', '状态', '版本', '响应']}
+          rows={state.services.map((service) => [
+            <Button
+              key="name"
+              variant="ghost"
+              size="sm"
+              onClick={() => onSelect(service.key as ServiceKey)}
+            >
+              {service.name}
+            </Button>,
+            <StateText key="state" service={service} />,
+            service.latest?.version ?? '—',
+            service.latest?.latency_ms != null
+              ? `${service.latest.latency_ms} ms`
+              : '—',
+          ])}
+        />
+      </Section>
+    </Stack>
+  );
+}
+
+function SwitchRow({
+  name,
+  label,
+  state,
+}: {
+  name: SwitchName;
+  label: string;
+  state: SystemState;
+}) {
+  const sw = state.switches[name];
+  const put = useSystem((s) => s.put);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  if (!sw.configured)
+    return (
+      <Notice title={`${sw.missing ?? '还没有配置'}`}>
+        写好配置后重启一次，再回到这里开启。方法见 docs/MEDIA.md。
+      </Notice>
+    );
+  return (
+    <Stack gap={2}>
+      <Switch
+        label={label}
+        checked={sw.enabled}
+        disabled={busy}
+        onCheckedChange={(enabled) => {
+          setBusy(true);
+          setError('');
+          put(`/api/admin/system/switches/${name}`, { enabled })
+            .catch((failure: unknown) =>
+              setError(failure instanceof Error ? failure.message : '切换失败'),
+            )
+            .finally(() => setBusy(false));
+        }}
+      />
+      <Text size="xs" tone="tertiary">
+        立即生效，所有分身一起。
+        {sw.changed_at &&
+          ` ${sw.changed_by ?? '本机'} 于 ${clock(Date.parse(sw.changed_at) / 1000)} ${sw.enabled ? '开启' : '关闭'}`}
+      </Text>
+      {error && (
+        <Text role="alert" size="sm" tone="danger">
+          {error}
+        </Text>
+      )}
+    </Stack>
+  );
+}
+
+function ConfigRows({ rows }: { rows: [string, string][] }) {
+  return (
+    <Section
+      level={4}
+      title="twin.toml 配置"
+      description="改配置文件后重启生效；密钥在 .env 里，这里不显示。"
+    >
+      <KeyValue items={rows} />
+    </Section>
+  );
+}
+
+const failureText = (failure: unknown, fallback: string) =>
+  failure instanceof Error ? failure.message : fallback;
+
+function changedNote(model: EditableModel) {
+  return model.custom && model.changed_at
+    ? `${model.changed_by ?? '本机'} 于 ${clock(Date.parse(model.changed_at) / 1000)} 修改，代替 twin.toml 的设置。`
+    : '';
+}
+
+/** Points a model at another address or model name, used from the next request on. Hidden behind one button: the
+ * page is for reading the state, and changing it is the rare task. */
+function ModelEdit({ model, note }: { model: EditableModel; note?: string }) {
+  const put = useSystem((s) => s.put);
+  const [open, setOpen] = useState(false);
+  const [baseUrl, setBaseUrl] = useState(model.base_url ?? '');
+  const [name, setName] = useState(model.model ?? '');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    setBaseUrl(model.base_url ?? '');
+    setName(model.model ?? '');
+  }, [model.base_url, model.model]);
+  if (model.locked)
+    return (
+      <Text size="xs" tone="tertiary">
+        {model.locked}
+      </Text>
+    );
+  const save = (json: object) => {
+    setBusy(true);
+    setError('');
+    put(`/api/admin/system/models/${model.name}`, json)
+      .then(() => setOpen(false))
+      .catch((failure: unknown) => setError(failureText(failure, '保存失败')))
+      .finally(() => setBusy(false));
+  };
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    save({ base_url: baseUrl.trim() || null, model: name.trim() || null });
+  };
+  const id = `system-model-${model.name}`;
+  return (
+    <Stack gap={2}>
+      {changedNote(model) && (
+        <Text size="xs" tone="tertiary">
+          {changedNote(model)}
+        </Text>
+      )}
+      {open ? (
+        <form onSubmit={submit} aria-label={`修改 ${model.section}`}>
+          <Stack gap={4}>
+            <Field
+              id={`${id}-url`}
+              label="地址"
+              help="OpenAI 兼容地址，通常以 /v1 结尾；不要把密钥写进地址"
+            >
+              <Input
+                id={`${id}-url`}
+                inputMode="url"
+                spellCheck={false}
+                autoComplete="off"
+                value={baseUrl}
+                onChange={(event) => setBaseUrl(event.target.value)}
+              />
+            </Field>
+            <Field id={`${id}-name`} label="模型名">
+              <Input
+                id={`${id}-name`}
+                spellCheck={false}
+                autoComplete="off"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+              />
+            </Field>
+            {note && (
+              <Notice tone="warning" title="换模型之后">
+                {note}
+              </Notice>
+            )}
+            <Row gap={2} wrap>
+              <Button type="submit" loading={busy}>
+                保存并立即生效
+              </Button>
+              <Button
+                variant="ghost"
+                disabled={busy}
+                onClick={() => {
+                  setOpen(false);
+                  setError('');
+                  setBaseUrl(model.base_url ?? '');
+                  setName(model.model ?? '');
+                }}
+              >
+                取消
+              </Button>
+              {model.custom && (
+                <Button
+                  variant="ghost"
+                  disabled={busy}
+                  onClick={() => save({})}
+                >
+                  恢复 twin.toml 的设置
+                </Button>
+              )}
+            </Row>
+          </Stack>
+        </form>
+      ) : (
+        <Row gap={2} wrap>
+          <Button variant="secondary" size="sm" onClick={() => setOpen(true)}>
+            修改地址和模型
+          </Button>
+        </Row>
+      )}
+      {error && (
+        <Text role="alert" size="sm" tone="danger">
+          {error}
+        </Text>
+      )}
+    </Stack>
+  );
+}
+
+const EMBED_NOTE =
+  '已有的检索向量会按新模型重新生成，完成前检索只按字面匹配；生成在后台进行，不影响聊天。';
+
+function ServicePane({
+  name,
+  state,
+}: {
+  name: 'embed' | 'asr' | 'tts';
+  state: SystemState;
+}) {
+  const service = state.services.find((s) => s.key === name);
+  const embedModel = state.editable_models?.find((m) => m.name === 'embed');
+  return (
+    <Stack gap={6}>
+      {name === 'tts' && (
+        <SwitchRow name="tts" label="启用朗读" state={state} />
+      )}
+      <Section level={4} title="运行状态">
+        {service ? (
+          <ServiceRecord service={service} now={state.now} />
+        ) : (
+          <Text size="sm" tone="secondary">
+            {name === 'tts' && !state.switches.tts.configured
+              ? '没有配置朗读服务。'
+              : '这个服务不经隧道访问，不做定时检查。'}
+          </Text>
+        )}
+      </Section>
+      <ConfigRows rows={state.config[name]} />
+      {name === 'embed' && embedModel && (
+        <ModelEdit model={embedModel} note={EMBED_NOTE} />
+      )}
+    </Stack>
+  );
+}
+
+function VideoPane({ state }: { state: SystemState }) {
+  return (
+    <Stack gap={6}>
+      <SwitchRow name="video" label="启用口型视频" state={state} />
+      <ConfigRows rows={state.config.video} />
+    </Stack>
+  );
+}
+
+/** Switches 工作 and 承诺账本 on or off for everyone; the menu follows at once. Chat is the twin and always stays. */
+function FeatureRow({
+  name,
+  feature,
+}: {
+  name: 'work' | 'ledger';
+  feature: NonNullable<SystemState['features']>['work'];
+}) {
+  const put = useSystem((s) => s.put);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  return (
+    <Stack gap={2}>
+      <Switch
+        label={feature.label}
+        checked={feature.enabled}
+        disabled={busy}
+        onCheckedChange={(enabled) => {
+          setBusy(true);
+          setError('');
+          put(`/api/admin/system/features/${name}`, { enabled })
+            .then(() => setFeatures({ [name]: enabled }))
+            .catch((failure: unknown) =>
+              setError(failureText(failure, '切换失败')),
+            )
+            .finally(() => setBusy(false));
+        }}
+      />
+      {feature.changed_at && (
+        <Text size="xs" tone="tertiary">
+          {feature.changed_by ?? '本机'} 于{' '}
+          {clock(Date.parse(feature.changed_at) / 1000)}{' '}
+          {feature.enabled ? '开启' : '关闭'}
+        </Text>
+      )}
+      {error && (
+        <Text role="alert" size="sm" tone="danger">
+          {error}
+        </Text>
+      )}
+    </Stack>
+  );
+}
+
+function Features({ state }: { state: SystemState }) {
+  const features = state.features;
+  return (
+    <Section
+      level={4}
+      title="功能"
+      description="关闭后所有分身、所有成员的菜单里都不再出现，已有的任务和记录保留，重新开启就回来。聊天是分身本身，始终开启。"
+    >
+      {features ? (
+        <Stack gap={4}>
+          <Switch label="聊天" checked disabled onCheckedChange={() => {}} />
+          <FeatureRow name="work" feature={features.work} />
+          <FeatureRow name="ledger" feature={features.ledger} />
+        </Stack>
+      ) : (
+        <Text size="sm" tone="secondary">
+          服务器版本不支持关闭功能。
+        </Text>
+      )}
+    </Section>
+  );
+}
+
+const HOURS = [1, 6, 12, 24, 72, 168];
+
+function QuotaForm({ quota }: { quota: SystemState['quota'] }) {
+  const put = useSystem((s) => s.put);
+  const [limit, setLimit] = useState(String(quota.limit));
+  const [hours, setHours] = useState(String(quota.hours));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    setLimit(String(quota.limit));
+    setHours(String(quota.hours));
+  }, [quota.limit, quota.hours]);
+  const save = (json: object) => {
+    setBusy(true);
+    setError('');
+    put('/api/admin/system/quota', json)
+      .catch((failure: unknown) =>
+        setError(failure instanceof Error ? failure.message : '保存失败'),
+      )
+      .finally(() => setBusy(false));
+  };
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    const value = Number(limit);
+    if (!Number.isInteger(value) || value < 0) {
+      setError('上限请填 0 或正整数');
+      return;
+    }
+    save({ batch_tokens: value, batch_hours: Number(hours) });
+  };
+  const options = HOURS.includes(quota.hours)
+    ? HOURS
+    : [...HOURS, quota.hours].sort((a, b) => a - b);
+  return (
+    <form onSubmit={submit}>
+      <Stack gap={4}>
+        <Row gap={4} wrap align="start">
+          <Field
+            id="system-quota-limit"
+            label="每人 token 上限"
+            help="0 表示不限"
+          >
+            <Input
+              id="system-quota-limit"
+              inputMode="numeric"
+              value={limit}
+              onChange={(event) => setLimit(event.target.value)}
+            />
+          </Field>
+          <Field id="system-quota-hours" label="统计时长">
+            <Select
+              id="system-quota-hours"
+              value={hours}
+              onChange={(event) => setHours(event.target.value)}
+            >
+              {options.map((h) => (
+                <option key={h} value={h}>
+                  {h < 24 ? `${h} 小时` : `${h / 24} 天`}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        </Row>
+        <Row gap={2} wrap>
+          <Button type="submit" loading={busy}>
+            保存
+          </Button>
+          {quota.custom && (
+            <Button variant="ghost" disabled={busy} onClick={() => save({})}>
+              恢复 twin.toml 的设置（{tokens(quota.default_limit)} /{' '}
+              {quota.default_hours} 小时）
+            </Button>
+          )}
+        </Row>
+        {error && (
+          <Text role="alert" size="sm" tone="danger">
+            {error}
+          </Text>
+        )}
+      </Stack>
+    </form>
+  );
+}
+
+/** Replaces or removes one key. The field starts empty and the value is never shown again, here or anywhere. */
+function KeyForm({
+  env,
+  isSet,
+  file,
+  onDone,
+}: {
+  env: string;
+  isSet: boolean;
+  file: string;
+  onDone: () => void;
+}) {
+  const put = useSystem((s) => s.put);
+  const [value, setValue] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const save = (json: object) => {
+    setBusy(true);
+    setError('');
+    put(`/api/admin/system/keys/${env}`, json)
+      .then(() => {
+        setValue('');
+        onDone();
+      })
+      .catch((failure: unknown) => setError(failureText(failure, '保存失败')))
+      .finally(() => setBusy(false));
+  };
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (value.trim()) save({ value: value.trim() });
+  };
+  const id = `system-key-${env}`;
+  return (
+    <Card variant="outline" padding="md">
+      <form onSubmit={submit} aria-label={`设置 ${env}`}>
+        <Stack gap={4}>
+          <Field
+            id={id}
+            label={isSet ? `新的 ${env}` : env}
+            help={`保存后立即生效，写入服务器的 ${file}；之后这里也只显示“已设置”。`}
+            error={error || undefined}
+          >
+            <Input
+              id={id}
+              type="password"
+              autoComplete="new-password"
+              spellCheck={false}
+              autoFocus
+              value={value}
+              onChange={(event) => setValue(event.target.value)}
+            />
+          </Field>
+          <Row gap={2} wrap>
+            <Button type="submit" loading={busy} disabled={!value.trim()}>
+              保存
+            </Button>
+            <Button variant="ghost" disabled={busy} onClick={onDone}>
+              取消
+            </Button>
+            {isSet && (
+              <Button variant="danger" disabled={busy} onClick={() => save({})}>
+                移除这个密钥
+              </Button>
+            )}
+          </Row>
+        </Stack>
+      </form>
+    </Card>
+  );
+}
+
+function auditText(entry: AuditEntry, params: SystemState['params']) {
+  if (entry.action === 'param' && entry.value) {
+    const param = params?.find((p) => p.key === entry.param);
+    const [, after] = entry.value;
+    const value =
+      typeof after === 'boolean'
+        ? after
+          ? '开'
+          : '关'
+        : `${after}${param?.unit ?? ''}`;
+    return `把${param?.label ?? entry.param ?? '参数'}改为 ${value}`;
+  }
+  if (entry.action === 'team_name' && entry.name)
+    return entry.name[1] ? `把团队名改为 ${entry.name[1]}` : '清除了团队名';
+  if (entry.action === 'kernel')
+    return `升级了 ${entry.personas?.length ?? 0} 个分身的记忆内核`;
+  if (entry.action === 'ledger')
+    return `整理了 ${entry.personas?.length ?? 0} 个分身的承诺账本`;
+  if (entry.action === 'key')
+    return `${entry.set ? '设置' : '移除'}了 ${entry.env ?? '密钥'}`;
+  if (entry.action === 'model' && entry.model && entry.address)
+    return `把 ${entry.section ?? '模型'} 改为 ${entry.address[1]} · ${entry.model[1] ?? '—'}`;
+  return '修改了系统设置';
+}
+
+/** The text models and what they cost: the token quota and where it went, each model's address, and the keys. */
+function Models({ state }: { state: SystemState }) {
+  const [editing, setEditing] = useState<string | null>(null);
+  const editable = (section: string) =>
+    state.editable_models?.find((m) => m.section === section);
+  const file = state.env_file ?? '.env';
+  const editingKey = state.keys.find((key) => key.env === editing);
+  const limits = state.params?.filter((p) => p.key.startsWith('llm_fallback.'));
+  return (
+    <Stack gap={6}>
+      <Section
+        level={4}
+        title="Token 额度"
+        description="录音库校对和重新整理按这个上限排队，改完立即生效。"
+      >
+        <QuotaMeter quota={state.quota} />
+        <QuotaForm quota={state.quota} />
+      </Section>
+      {state.usage && (
+        <Section
+          level={4}
+          title="Token 用在哪"
+          description="所有大模型调用按用途汇总，只记次数和 token，不记内容。"
+        >
+          <UsageTable usage={state.usage} />
+        </Section>
+      )}
+      <Section
+        level={4}
+        title="文字模型"
+        description="改地址或模型名立即生效，所有分身一起；接口类型和其他参数在 twin.toml 里改。"
+      >
+        <Stack as="ul" gap={2}>
+          {state.models.map((model) => {
+            const edit = editable(model.section);
+            return (
+              <Card as="li" key={model.section} variant="outline" padding="md">
+                <Stack gap={3}>
+                  <KeyValue
+                    items={[
+                      ['用途', model.use],
+                      ['配置', model.section],
+                      ['接口', model.provider],
+                      ['模型', model.model],
+                      [
+                        '地址',
+                        <Row key="address" gap={2} wrap>
+                          {model.address}
+                          {model.external && <Badge tone="warning">外部</Badge>}
+                        </Row>,
+                      ],
+                    ]}
+                  />
+                  {edit && <ModelEdit model={edit} />}
+                </Stack>
+              </Card>
+            );
+          })}
+        </Stack>
+        {limits?.map((param) => (
+          <ParamField key={param.key} param={param} />
+        ))}
+      </Section>
+      <Section
+        level={4}
+        title="密钥"
+        description={`密钥写在服务器的 ${file} 里，这里只显示是否已设置，从不显示内容。`}
+      >
+        <Table
+          caption="密钥"
+          headers={['环境变量', '用途', '状态', '']}
+          rows={state.keys.map((key) => [
+            key.env,
+            key.use,
+            key.set ? (
+              <Badge key="set" tone="success">
+                已设置
+              </Badge>
+            ) : (
+              <Badge key="unset" tone="warning">
+                未设置
+              </Badge>
+            ),
+            <Button
+              key="edit"
+              variant="ghost"
+              size="sm"
+              aria-label={`${key.set ? '更换' : '设置'} ${key.env}`}
+              onClick={() => setEditing(key.env)}
+            >
+              {key.set ? '更换' : '设置'}
+            </Button>,
+          ])}
+        />
+        {editingKey && (
+          <KeyForm
+            key={editingKey.env}
+            env={editingKey.env}
+            isSet={editingKey.set}
+            file={file}
+            onDone={() => setEditing(null)}
+          />
+        )}
+      </Section>
+      {state.audit && state.audit.length > 0 && (
+        <Section level={4} title="最近修改">
+          <Stack as="ul" gap={1}>
+            {state.audit.slice(0, 5).map((entry, index) => (
+              <Text as="li" key={index} size="xs" tone="secondary">
+                {clock(Date.parse(entry.at) / 1000)} {entry.by ?? '本机'}{' '}
+                {auditText(entry, state.params)}
+              </Text>
+            ))}
+          </Stack>
+        </Section>
+      )}
+    </Stack>
+  );
+}
+
+/** The sections of the settings an administrator has, apart from the recording library and memory. */
+export type SystemSection =
+  'team' | 'features' | 'models' | 'status' | ServiceKey;
+
+/** One administrator's page of the settings, from the system state the server reports. */
+export function SystemPane({
+  section,
+  state,
+  onSelect,
+}: {
+  section: SystemSection;
+  state: SystemState;
+  onSelect: (key: ServiceKey) => void;
+}) {
+  switch (section) {
+    case 'status':
+      return <Status state={state} onSelect={onSelect} />;
+    case 'gpu':
+      return <Gpu state={state} onSelect={onSelect} />;
+    case 'video':
+      return <VideoPane state={state} />;
+    case 'team':
+      return <TeamName key={state.team_name ?? ''} name={state.team_name} />;
+    case 'features':
+      return <Features state={state} />;
+    case 'models':
+      return <Models state={state} />;
+    default:
+      return <ServicePane name={section} state={state} />;
+  }
+}

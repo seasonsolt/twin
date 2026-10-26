@@ -154,6 +154,14 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
             canManage
               ? [
                   { label: '编辑', onSelect: () => setEditing(true) },
+                  {
+                    label: '换头像',
+                    onSelect: () =>
+                      setParams(
+                        { section: 'assets', focus: 'portrait' },
+                        { replace: true },
+                      ),
+                  },
                   { label: '接入', onSelect: () => setSettings('channels') },
                   { label: '别名', onSelect: () => setSettings('aliases') },
                   {
@@ -299,7 +307,12 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
               {
                 value: 'assets',
                 label: '形象和声音',
-                content: <AssetsTab identity={identity} />,
+                content: (
+                  <AssetsTab
+                    identity={identity}
+                    focusPortrait={params.get('focus') === 'portrait'}
+                  />
+                ),
               },
             ]}
           />

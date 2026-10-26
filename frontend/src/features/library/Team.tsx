@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { AudioLines, IdCard, Pencil, Trash2 } from 'lucide-react';
+import { AudioLines, IdCard, ImagePlus, Pencil, Trash2 } from 'lucide-react';
 import {
   Navigate,
   useLocation,
@@ -34,7 +34,12 @@ import {
 import { PersonFace } from './PersonFace';
 import { api } from '../../lib/api';
 import { byName } from '../../lib/names';
-import { chatPath, memberPath, twinMemberPath } from '../../lib/members';
+import {
+  chatPath,
+  memberPath,
+  portraitQuery,
+  twinMemberPath,
+} from '../../lib/members';
 import { useAuth } from '../../stores/auth';
 import { usePersonas, type Persona } from '../../stores/personas';
 import { useNewTwinCard } from '../../components/layout/NewTwin';
@@ -444,6 +449,7 @@ function personRow({
   busy,
   onOpen,
   onMember,
+  onPortrait,
   onEdit,
   admin,
   onAddress,
@@ -461,6 +467,8 @@ function personRow({
   onOpen: (personaId: string) => void;
   /** Their page: the recordings they are in, and their twin if they have one. */
   onMember: () => void;
+  /** Their twin's page, at its photo. */
+  onPortrait: () => void;
   onEdit: () => void;
   onAddress: () => void;
   onRemove: () => void;
@@ -576,6 +584,16 @@ function personRow({
               disabled: busy,
               onSelect: onEdit,
             },
+            ...(person.persona_id
+              ? [
+                  {
+                    label: '换头像',
+                    icon: ImagePlus,
+                    disabled: busy,
+                    onSelect: onPortrait,
+                  },
+                ]
+              : []),
             // Nothing was heard of someone made by hand: no voice to hear or check.
             ...(person.speakers > 0
               ? [
@@ -648,6 +666,7 @@ function twinRow({
   match,
   onOpen,
   onMember,
+  onPortrait,
   onSame,
   onDelete,
 }: {
@@ -658,6 +677,7 @@ function twinRow({
   match?: TwinMatch;
   onOpen: (personaId: string) => void;
   onMember: () => void;
+  onPortrait: () => void;
   onSame: (match: TwinMatch, same: boolean) => void;
   /** Delete the twin, which waits a week in the trash. */
   onDelete: () => void;
@@ -669,6 +689,9 @@ function twinRow({
           { label: '是同一人', onSelect: () => onSame(match, true) },
           { label: '不是同一人', onSelect: () => onSame(match, false) },
         ]
+      : []),
+    ...(twin.can_manage !== false
+      ? [{ label: '换头像', icon: ImagePlus, onSelect: onPortrait }]
       : []),
     ...(deletable(twin)
       ? [
@@ -1097,6 +1120,8 @@ function Roster({
                   admin,
                   onOpen: chat,
                   onMember: () => void navigate(memberPath(entry.person.id)),
+                  onPortrait: () =>
+                    void navigate(memberPath(entry.person.id) + portraitQuery),
                   onEdit: () => setEditing(entry.person),
                   onAddress: () => address(entry.person),
                   onRemove: () => void remove(entry.person),
@@ -1110,6 +1135,10 @@ function Roster({
                   match: matches.find((m) => m.persona_id === entry.twin.id),
                   onOpen: chat,
                   onMember: () => void navigate(twinMemberPath(entry.twin.id)),
+                  onPortrait: () =>
+                    void navigate(
+                      twinMemberPath(entry.twin.id) + portraitQuery,
+                    ),
                   onSame: (match, same) => void sameTwin(match, same),
                   onDelete: () => void deleteTwin(entry.twin, reloadAll),
                 }),

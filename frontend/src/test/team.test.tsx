@@ -423,6 +423,41 @@ it('edits a person name and gender and opens the member page of their twin', asy
   expect(switched).toEqual([]);
 });
 
+it('opens the member page at the photo to change a twin’s avatar', async () => {
+  people = [person({ persona_id: 'p-1' })];
+  usePersonas.setState({
+    items: [
+      {
+        id: 'p-1',
+        name: '张总',
+        avatar_url: null,
+        avatar_preset: 'stone',
+        sources: 1,
+        created_at: '',
+        is_default: false,
+      },
+    ],
+    refresh: async () => {},
+  });
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      if (url === '/api/library/people') return json({ items: people });
+      if (url.startsWith('/api/library/review')) return json(emptyReview);
+      throw new Error(url);
+    }),
+  );
+  render(teamView());
+  const row = (await screen.findByText('张总', { selector: 'p' })).closest(
+    'tr',
+  )!;
+  await userEvent.click(within(row).getByLabelText('张总的更多操作'));
+  await userEvent.click(within(row).getByRole('button', { name: '换头像' }));
+  expect(screen.getByLabelText('地址')).toHaveTextContent(
+    '/team/per_1?section=assets&focus=portrait',
+  );
+});
+
 it('searches people locally, edits them from the menu, and keeps deletion there', async () => {
   const calls: string[] = [];
   const originalFetch = fetch;

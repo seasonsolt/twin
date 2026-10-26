@@ -11,8 +11,11 @@ import { RecordingShortcut } from '../sources/MediaClaim';
 /** The 形象和声音 tab: the illustration or portrait the twin shows, and the voice it speaks with. */
 export function AssetsTab({
   identity,
+  focusPortrait = false,
 }: {
   identity: ReturnType<typeof useIdentity>;
+  /** Opened by “换头像”: straight to the photo. */
+  focusPortrait?: boolean;
 }) {
   const personaId = usePersonaId();
   const modelUrl = identity.capabilities?.avatar_model?.url;
@@ -68,7 +71,7 @@ export function AssetsTab({
         onSave={identity.savePreset}
       />
       <RecordingShortcut key={personaId} />
-      <SelfAssets />
+      <SelfAssets focusPortrait={focusPortrait} />
     </Stack>
   );
 }

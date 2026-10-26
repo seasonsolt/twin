@@ -7,3 +7,5 @@ export const twinMemberPath = (twinId: string, section?: string) =>
 /** The chat with a twin (``?with=``): its conversations listed, the next message written to it. */
 export const chatPath = (twinId: string) =>
   `/chat?with=${encodeURIComponent(twinId)}`;
+/** A member page opened on the twin's photo, to change it (“换头像”). */
+export const portraitQuery = '?section=assets&focus=portrait';

@@ -99,7 +99,14 @@ function useObjectUrl(blob: Blob | null) {
 const passage =
   '今天的阳光很温暖，我想放慢脚步，看看身边的风景。无论生活怎样变化，我都会认真倾听，坦诚表达，把每一个平凡的日子过得有趣而充实。';
 
-export function SelfAssets({ active = true }: { active?: boolean }) {
+/** ``focusPortrait``: opened to change the photo (“换头像”), so the button that does is focused once loaded. */
+export function SelfAssets({
+  active = true,
+  focusPortrait = false,
+}: {
+  active?: boolean;
+  focusPortrait?: boolean;
+}) {
   const personaId = usePersonaId();
   const [profile, setProfile] = useState<Assets | null>(null);
   const [caps, setCaps] = useState<Capabilities | null>(null);
@@ -118,6 +125,7 @@ export function SelfAssets({ active = true }: { active?: boolean }) {
   const [area, setArea] = useState<Area | null>(null);
   const [sample, setSample] = useState<string | null>(null);
   const portraitInput = useRef<HTMLInputElement>(null);
+  const portraitButton = useRef<HTMLButtonElement>(null);
   const voiceInput = useRef<HTMLInputElement>(null);
   const request = useRef<AbortController | null>(null);
   const recorder = useRecorder(active, personaId);
@@ -127,6 +135,12 @@ export function SelfAssets({ active = true }: { active?: boolean }) {
     recorder.state === 'recording' || recorder.state === 'requesting';
   const disabled = busy || recording || !profile;
   usePendingWork(busy || recording, busy ? busyLabel : '正在录音…');
+  const loaded = profile !== null;
+  useEffect(() => {
+    if (!focusPortrait || !loaded) return;
+    portraitButton.current?.focus();
+    portraitButton.current?.scrollIntoView?.({ block: 'center' });
+  }, [focusPortrait, loaded]);
 
   useEffect(() => {
     if (!active) return;
@@ -357,6 +371,7 @@ export function SelfAssets({ active = true }: { active?: boolean }) {
             </AvatarFrame>
           )}
           <Button
+            ref={portraitButton}
             variant="secondary"
             disabled={disabled}
             onClick={() => portraitInput.current?.click()}

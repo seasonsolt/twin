@@ -22,7 +22,7 @@ _RUNS = re.compile(f"([{_CJK}]+)|([^\\W_{_CJK}]+)")
 
 # What the indexes kept by ``cached`` may take together, roughly; ``[ops] keyword_index_mb`` sets it for the web
 # service. A person with a hundred thousand expressions takes some 70 MB.
-KEPT_BYTES = 192 * 2**20
+KEPT_BYTES = 1024 * 2**20
 # A kept index takes changed documents in a small index of their own until they are this share of the documents it
 # was built from; then it is built again from all of them.
 COMPACT_SHARE = 0.2

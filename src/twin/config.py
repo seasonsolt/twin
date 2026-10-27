@@ -466,8 +466,10 @@ class OpsSettings(BaseModel):
     compute_services: dict[str, list[str]] = Field(default_factory=dict)
     tunnel_command: list[str] = Field(default_factory=list)
     # The keyword indexes chat keeps between questions, about this many MB for all twins together; a twin with a
-    # hundred thousand expressions takes some 70. The latest one is kept whatever its size.
-    keyword_index_mb: int = Field(default=192, ge=0)
+    # hundred thousand expressions takes some 70, one with three hundred and fifty thousand some 200 over its two
+    # indexes. Too small, and one of a big twin's indexes is built again for every question (about a minute). The
+    # latest one is kept whatever its size.
+    keyword_index_mb: int = Field(default=1024, ge=0)
 
 
 class UpgradeSettings(BaseModel):

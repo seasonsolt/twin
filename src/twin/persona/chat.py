@@ -106,6 +106,15 @@ K_EXPRESSIONS_SPAN = 24
 # The person's messages from the window a question points at ("last Saturday"), ranked within that window.
 K_WINDOW = 16
 K_OTHERS = 6
+# A line found in a meeting is shown with the lines said around it, both speakers': a transcript is cut into short
+# utterances, and what was decided, or whom it was asked of, is often in the next line. Overlapping windows of one
+# meeting are merged into one passage.
+PASSAGE_BEFORE = 6
+PASSAGE_AFTER = 4
+PASSAGE_LINE_CHARS = 300
+PASSAGE_CHARS = 2400
+MAX_PASSAGES = 10
+MEETING_KINDS = frozenset({SourceKind.AUDIO, SourceKind.VIDEO})
 # Per offered alternative, added on top of the shared ranking so one alternative's evidence is never crowded out.
 K_ALTERNATIVE_ITEMS = 1
 K_ALTERNATIVE_EXPRESSIONS = 2
@@ -277,6 +286,15 @@ class Asker:
     person: bool = False
 
 
+@dataclass(frozen=True)
+class Passage:
+    """Lines said in a row in one meeting around the lines retrieval found; ``ref`` is the best-ranked of those."""
+
+    ref: str
+    title: str
+    lines: tuple[Expression, ...]
+
+
 @dataclass
 class PersonaContext:
     items: list[tuple[PersonaItem, float]]
@@ -328,6 +346,8 @@ class PersonaContext:
     # Citable ids an answer can rest on without lowering its confidence: items standing on the person's own words or
     # reviewed by them, and the person's own words.
     trusted: set[str] = field(default_factory=set)
+    # The meetings' lines around what was found there (``_passages``), shown in place of the lines alone.
+    passages: list[Passage] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         items = [i for i, _ in self.items] + self.core
@@ -336,6 +356,7 @@ class PersonaContext:
             | {e.expression_id for e, _ in self.expressions}
             | {e.expression_id for e, _ in self.others}
             | {ledger_ref(e) for e, _ in self.ledger}
+            | {e.expression_id for p in self.passages for e in p.lines}
         )
         self.trusted = (
             {i.item_id for i in items if i.trusted}
@@ -473,6 +494,9 @@ class _Material:
     core: list[PersonaItem]
     voice: list[str]
     extreme_rate: float | None
+    # Every line of the meetings in the view, by source and number, and each meeting's title (``_passages``).
+    lines: dict[tuple[str, int], Expression] = field(default_factory=dict)
+    meetings: dict[str, str] = field(default_factory=dict)
 
     def keywords_only(self) -> _Material:
         return replace(
@@ -485,7 +509,7 @@ class _Material:
     def nbytes(self) -> int:
         """Roughly what the material takes: its vectors, and about 1.3 KB for each candidate read."""
         corpora = (self.items, self.expressions, self.others)
-        return sum(c.vectors[1].nbytes + 1300 * len(c.candidates) for c in corpora)
+        return sum(c.vectors[1].nbytes + 1300 * len(c.candidates) for c in corpora) + 100 * len(self.lines)
 
 
 # What the materials ``PersonaChat`` keeps between questions may take together, roughly; ``[ops] chat_memory_mb`` sets
@@ -537,6 +561,52 @@ def _keep(key: Hashable | None, revision: Callable[[], int], read: Callable[[], 
         ):
             _kept_material.popitem(last=False)
     return material
+
+
+def _passages(material: _Material, found: Sequence[Expression]) -> list[Passage]:
+    """The lines of each meeting around the ``found`` ones (best first), windows overlapping or touching in one meeting
+    merged into one passage, which keeps the place of its best line; at most ``MAX_PASSAGES``. Only lines in the
+    conversation's view are shown."""
+    windows: dict[str, list[tuple[int, int, str]]] = {}
+    for e in found:
+        if e.source_id in material.meetings:
+            windows.setdefault(e.source_id, []).append((e.idx - PASSAGE_BEFORE, e.idx + PASSAGE_AFTER, e.expression_id))
+    rank = {e.expression_id: n for n, e in enumerate(found)}
+    # (rank of the best line, meeting, first line, last line, best line) per merged window.
+    runs: list[tuple[int, str, int, int, str]] = []
+    for source_id, spans in windows.items():
+        spans.sort()
+        lo, hi, best = spans[0]
+        for start, end, ref in spans[1:]:
+            if start > hi + 1:
+                runs.append((rank[best], source_id, lo, hi, best))
+                lo, hi, best = start, end, ref
+            else:
+                hi, best = max(hi, end), min(best, ref, key=rank.__getitem__)
+        runs.append((rank[best], source_id, lo, hi, best))
+    passages = []
+    for _, source_id, lo, hi, ref in sorted(runs)[:MAX_PASSAGES]:
+        lines = [
+            line
+            for idx in range(max(lo, 0), hi + 1)
+            if (line := material.lines.get((source_id, idx))) is not None and line.text.strip()
+        ]
+        passages.append(Passage(ref, material.meetings[source_id], tuple(lines)))
+    return passages
+
+
+def _passage_lines(passage: Passage) -> list[tuple[Expression, str]]:
+    """The passage's lines as shown, up to ``PASSAGE_CHARS`` together."""
+    shown: list[tuple[Expression, str]] = []
+    total = 0
+    for e in passage.lines:
+        text = _clip(e.text, PASSAGE_LINE_CHARS)
+        line = f"  {'我' if e.is_target else e.speaker}：{text}"
+        if total + len(line) > PASSAGE_CHARS:
+            break
+        shown.append((e, text))
+        total += len(line) + 1
+    return shown
 
 
 def _family(store: PersonaStore, namespace: str, *view: object) -> Hashable:
@@ -707,6 +777,7 @@ class PersonaChat:
         fingerprint = embedder_fingerprint(self.embedder)
         core, voice = self._portrait(list(items.values()), list(expressions.values()))
         surveys = {s.source_id for s in self.store.list_sources(SourceKind.QUESTIONNAIRE)}
+        meetings = {s.source_id: s.title for s in view.sources.values() if s.kind in MEETING_KINDS}
         view_of = (self.audience, as_of)
 
         def corpus[T](namespace: str, candidates: dict[str, T], text: Callable[[T], str]) -> _Corpus[T]:
@@ -722,6 +793,8 @@ class PersonaChat:
             core,
             voice,
             extreme_rate(e.text for e in expressions.values() if e.source_id in surveys and not e.narrated),
+            {(e.source_id, e.idx): e for e in [*expressions.values(), *others.values()] if e.source_id in meetings},
+            meetings,
         )
 
     def _ranked(
@@ -771,6 +844,7 @@ class PersonaChat:
             meeting_record=self.meeting_record,
             audience=self.audience,
             assistant=self.assistant,
+            passages=_passages(material, [e for e, _ in [*ranked_expr, *ranked_others]]),
         )
 
     def _items(self, as_of: dt.date | None, view: ExpressionView, hidden: PrivateWords) -> dict[str, PersonaItem]:
@@ -1347,6 +1421,7 @@ def _quote_materials(ctx: PersonaContext) -> list[str]:
     materials.extend(_clip(text, VOICE_MAX_CHARS) for text in ctx.voice)
     materials.extend(passage.text for passage in ctx.attachments)
     materials.extend(e.quote for e, _ in ctx.ledger)
+    materials.extend(text for p in ctx.passages for _, text in _passage_lines(p))
     materials.extend(ctx.owner_said)
     return materials
 
@@ -1550,18 +1625,28 @@ def _material_lines(ctx: PersonaContext) -> list[str]:
     lines.extend(_render_item(i) for i, _ in ctx.items)
     if not ctx.items:
         lines.append("（无相关条目）")
-    own = [e for e, _ in ctx.expressions if not e.narrated]
-    narrated = [e for e, _ in ctx.expressions if e.narrated]
-    lines.append("本人原话：")
-    lines.extend(_render_expression(e, ctx.query) for e in own)
-    if not own:
+    # A line of a meeting is shown in its passage instead, unless the passage is cut before it.
+    shown = {e.expression_id for p in ctx.passages for e, _ in _passage_lines(p)}
+    own = [e for e, _ in ctx.expressions if not e.narrated and e.expression_id not in shown]
+    narrated = [e for e, _ in ctx.expressions if e.narrated and e.expression_id not in shown]
+    others = [e for e, _ in ctx.others if e.expression_id not in shown]
+    if ctx.passages:
+        lines.append("会议片段（按会上说话的顺序；“我”是本人，其他人说的话是别人说的，不是我的观点或经历）：")
+        for p in ctx.passages:
+            date = p.lines[0].date if p.lines else None
+            lines.append(f"- [{p.ref}] 会议 {f'{date.isoformat()} ' if date else ''}{p.title}：")
+            lines.extend(f"  {'我' if e.is_target else e.speaker}：{text}" for e, text in _passage_lines(p))
+    if own or not ctx.passages:
+        lines.append("本人原话：")
+        lines.extend(_render_expression(e, ctx.query) for e in own)
+    if not own and not ctx.passages:
         lines.append("（无相关原话）")
     if narrated:
         lines.append("资料记述（不是本人原话）：")
         lines.extend(_render_expression(e, ctx.query) for e in narrated)
-    if ctx.others:
+    if others:
         lines.append("别人对我说过的话（是别人说的，不是我的观点或经历）：")
-        lines.extend(_render_other(e, ctx.query, n) for n, (e, _) in enumerate(ctx.others))
+        lines.extend(_render_other(e, ctx.query, n) for n, e in enumerate(others))
     if ctx.attachments:
         lines.append("本次上传文件摘录（只用于当前问题，不是本人档案）：")
         lines.extend(

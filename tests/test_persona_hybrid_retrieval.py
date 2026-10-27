@@ -18,8 +18,8 @@ from twin.persona import chat as pc
 from twin.persona import lexical
 from twin.persona.items import PersonaItem
 from twin.persona.lexical import BM25, cached, tokenize
-from twin.persona.schema import ChatTurn, Expression, Source
-from twin.persona.sources import parse_chat, pseudonym
+from twin.persona.schema import ChatTurn, Expression, Source, SourceKind
+from twin.persona.sources import parse_chat, parse_media, pseudonym
 from twin.persona.store import PersonaStore
 from twin.persona.tiers import COLLEAGUE, SELF, Audience
 
@@ -368,3 +368,60 @@ def test_kept_materials_beyond_the_budget_are_dropped_least_recently_used_first(
     monkeypatch.setattr(pc, "KEPT_MATERIAL_BYTES", material.nbytes())
     read(paths[1])
     assert [key[0] for key in pc._kept_material] == [str(paths[1].resolve())]
+
+
+def test_a_line_found_in_a_meeting_is_shown_with_the_lines_said_around_it() -> None:
+    settings = Settings(target_name="张三")
+    source = Source(
+        source_id="src_meeting",
+        kind=SourceKind.AUDIO,
+        title="190910_1832",
+        origin="录音库：190910_1832.mp3",
+        imported_at="2026-10-27T00:00:00+00:00",
+        n_expressions=0,
+        n_target=0,
+        text_state="raw",
+        creation_time="2019-09-10",
+        media_status="ready",
+    )
+    lines = [("张三" if i % 2 else "李四", f"第{i}句闲聊", i % 2 == 1) for i in range(30)]
+    lines[11] = ("张三", "客户案例为什么员工不转发", True)
+    lines[13] = ("李四", "老王下次开会前把转发率分析清楚", False)
+    lines[25] = ("张三", "客户案例要真实", True)
+    with PersonaStore(":memory:") as store:
+        store.put_source(parse_media(source, lines))
+        store.put_source(parse_chat("chat.txt", "张三：客户案例我写过一篇\n", settings))
+        chat = pc.PersonaChat(store, FakeLLM(lambda *a: {}), ConstantEmbedder(), settings)
+        ctx = chat.retrieve("客户案例")
+    # The two lines found in the meeting are far apart: a passage each, around them, both speakers', in order.
+    [first, second] = sorted(ctx.passages, key=lambda p: p.lines[0].idx)
+    assert [e.idx for e in first.lines] == list(range(11 - pc.PASSAGE_BEFORE, 11 + pc.PASSAGE_AFTER + 1))
+    assert first.ref == "src_meeting#00011" and first.title == "190910_1832"
+    assert [e.idx for e in second.lines] == list(range(25 - pc.PASSAGE_BEFORE, 30))
+    text = pc.material_text(ctx)
+    assert "会议片段" in text and f"  {pseudonym('李四')}：老王下次开会前把转发率分析清楚" in text
+    assert f"- [{first.ref}] 会议 2019-09-10 190910_1832：" in text
+    # A line of a meeting is shown once, in its passage; a chat line stays one of the person's own words.
+    assert text.count("客户案例为什么员工不转发") == 1
+    assert "本人原话：" in text and "客户案例我写过一篇" in text
+    # What the passage shows may be cited and quoted.
+    assert "src_meeting#00013" in ctx.ids
+    quoted, removed = pc.remove_unverified_quotes("他说「老王下次开会前把转发率分析清楚」", pc._quote_materials(ctx))
+    assert removed == 0 and "老王下次开会前" in quoted
+
+
+def test_windows_that_overlap_in_a_meeting_are_one_passage() -> None:
+    meeting = {
+        ("m", i): Expression(
+            expression_id=f"m#{i:05d}", source_id="m", idx=i, speaker="甲", is_target=False, text=f"第{i}句"
+        )
+        for i in range(40)
+    }
+    material = pc._Material(*(pc._Corpus(pc.NO_VECTORS, {}, str) for _ in range(3)), [], [], None, meeting, {"m": "会"})
+    found = [meeting[("m", 20)], meeting[("m", 15)], meeting[("m", 35)]]
+    passages = pc._passages(material, found)
+    # 15 and 20 overlap: one passage, cited by the better-ranked 20; 35 stands apart.
+    assert [(p.ref, p.lines[0].idx, p.lines[-1].idx) for p in passages] == [
+        ("m#00020", 15 - pc.PASSAGE_BEFORE, 20 + pc.PASSAGE_AFTER),
+        ("m#00035", 35 - pc.PASSAGE_BEFORE, 39),
+    ]

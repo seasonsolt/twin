@@ -13,10 +13,11 @@ from twin.llm import FakeLLM, LLMError, LLMTruncated
 from twin.persona import profile as pf
 from twin.persona.dimensions import FACETS
 from twin.persona.items import ExtractStats, PersonaCandidate, PEvidence, item_as_of
-from twin.persona.schema import EvidenceClass, SourceKind
-from twin.persona.sources import parse_chat, parse_questionnaire
+from twin.persona.schema import EvidenceClass, ParsedSource, Source, SourceKind
+from twin.persona.sources import parse_chat, parse_media, parse_questionnaire
 from twin.persona.store import PersonaStore
 from twin.usage import BudgetExceeded
+from twin.util import date_from_name
 
 D = dt.date
 
@@ -849,3 +850,58 @@ def test_a_failed_merge_batch_is_merged_again_in_halves(store: PersonaStore, set
 
     with pytest.raises(BudgetExceeded):
         pf.merge_facet(FakeLLM(budget_stop), "2.1", candidates, settings)
+
+
+@pytest.mark.parametrize(
+    ("name", "day"),
+    [
+        ("190708_1834", dt.date(2019, 7, 8)),
+        ("260131-1044", dt.date(2026, 1, 31)),
+        ("周会 2019-07-08", dt.date(2019, 7, 8)),
+        ("20190708_1834", dt.date(2019, 7, 8)),
+        ("191308_1834", None),
+        ("190708", None),
+    ],
+)
+def test_a_file_named_by_when_it_was_recorded_is_dated(name: str, day: dt.date | None) -> None:
+    assert date_from_name(name) == day
+
+
+def _meeting(date: str | None) -> ParsedSource:
+    source = Source(
+        source_id="src_lib_rec_1",
+        kind=SourceKind.AUDIO,
+        title="190708_1834",
+        origin="录音库：190708_1834.mp3",
+        imported_at="2026-10-27T00:00:00+00:00",
+        n_expressions=0,
+        n_target=0,
+        text_state="raw",
+        creation_time=date,
+        media_status="ready",
+    )
+    # Enough lines for several chunks, so the date moves where they are cut.
+    return parse_media(source, [("本人", f"第{i}件事我们先看回款再定预算，" * 6, True) for i in range(120)])
+
+
+def test_a_recording_dated_after_it_was_extracted_is_not_extracted_again() -> None:
+    settings = Settings(target_name="本人")
+    with PersonaStore(":memory:") as store:
+        store.put_source(_meeting(None))
+        pf.build_profile(store, FakeLLM(lambda s, u, schema: {"items": []}), settings)
+        undated = set(store.chunk_facets())
+        assert len(undated) > 1
+        # The library now dates it by its file's name: its lines carry the day, its chunks stay as extracted.
+        store.put_source(_meeting("2019-07-08"))
+        assert {e.date for e in store.list_expressions("src_lib_rec_1")} == {dt.date(2019, 7, 8)}
+        assert pf.pending_chunks(store, settings) == 0
+        llm = FakeLLM(lambda s, u, schema: {"items": []})
+        report = pf.build_profile(store, llm, settings)
+        assert (report.chunks_extracted, report.chunks_dropped) == (0, 0)
+        assert not [call for call in llm.calls if call[0] == "ExtractDraft"]
+        assert set(store.chunk_facets()) == undated
+    # A recording first stored with its day is cut with it.
+    with PersonaStore(":memory:") as store:
+        store.put_source(_meeting("2019-07-08"))
+        pf.build_profile(store, FakeLLM(lambda s, u, schema: {"items": []}), settings)
+        assert set(store.chunk_facets()).isdisjoint(undated)

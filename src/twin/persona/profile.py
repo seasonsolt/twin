@@ -19,7 +19,7 @@ import hashlib
 import json
 import re
 import threading
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from concurrent.futures import Executor, ThreadPoolExecutor
 from contextvars import copy_context
 from dataclasses import dataclass, field, replace
@@ -82,7 +82,7 @@ def pending_chunks(store: PersonaStore, settings: Settings) -> int:
     allowed = consented_facets(store)
     sources = [s for s in store.list_sources() if s.media_status in (None, "ready")]
     done = store.chunk_facets()
-    return sum(bool(_missing(c, done, allowed)) for c in corpus_chunks(store, sources, allowed, settings))
+    return sum(bool(_missing(c, done, allowed)) for c in corpus_chunks(store, sources, allowed, settings, done))
 
 
 def _missing(chunk: Chunk, done: dict[str, frozenset[str] | None], allowed: frozenset[str]) -> frozenset[str]:
@@ -194,8 +194,8 @@ def _clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def render_entry(n: int, e: Expression) -> str:
-    head = " · ".join(x for x in (e.date.isoformat() if e.date else "", e.channel) if x)
+def render_entry(n: int, e: Expression, dated: bool = True) -> str:
+    head = " · ".join(x for x in (e.date.isoformat() if e.date and dated else "", e.channel) if x)
     lines = [f"[{n}] {head}".rstrip()]
     if e.context:
         lines.append(f"语境：{_clip(e.context, CONTEXT_CHARS)}")
@@ -227,21 +227,38 @@ def chunks_of(source: Source, entries: Sequence[Expression], allowed: frozenset[
 
 
 def corpus_chunks(
-    store: PersonaStore, sources: Sequence[Source], allowed: frozenset[str], settings: Settings
+    store: PersonaStore,
+    sources: Sequence[Source],
+    allowed: frozenset[str],
+    settings: Settings,
+    stored: Collection[str] = (),
 ) -> list[Chunk]:
     """The chunks of every source in ``sources``, cut from one view of the whole corpus: ``chunks_for`` per source
-    would read and pseudonymise every expression once per source."""
+    would read and pseudonymise every expression once per source.
+
+    A source extracted before it had a date (a recording named ``190708_1834``, dated since by its file's name) keeps
+    the chunks it was cut into then while every one of them is among the ``stored`` ones: the date changes each chunk's
+    text and where it is cut, and the whole recording would be extracted again for a date its lines already carry."""
     by_source: dict[str, list[Expression]] = {}
     for e in expression_view(store, settings, target_only=True):
         by_source.setdefault(e.source_id, []).append(e)
-    return [c for s in sources for c in _chunk(s, by_source.get(s.source_id, []), allowed)]
+    chunks = []
+    for s in sources:
+        entries = by_source.get(s.source_id, [])
+        cut = _chunk(s, entries, allowed)
+        if stored and not any(c.chunk_id in stored for c in cut) and any(e.date for e in entries):
+            undated = _chunk(s, entries, allowed, dated=False)
+            if all(c.chunk_id in stored for c in undated):
+                cut = undated
+        chunks.extend(cut)
+    return chunks
 
 
-def _render(entries: Sequence[Expression]) -> str:
-    return "\n\n".join(render_entry(n, e) for n, e in enumerate(entries, 1))
+def _render(entries: Sequence[Expression], dated: bool = True) -> str:
+    return "\n\n".join(render_entry(n, e, dated) for n, e in enumerate(entries, 1))
 
 
-def _chunk(source: Source, entries: Sequence[Expression], allowed: frozenset[str]) -> list[Chunk]:
+def _chunk(source: Source, entries: Sequence[Expression], allowed: frozenset[str], dated: bool = True) -> list[Chunk]:
     chunks: list[Chunk] = []
     current: list[Expression] = []
     size = 0
@@ -249,7 +266,7 @@ def _chunk(source: Source, entries: Sequence[Expression], allowed: frozenset[str
     def close() -> None:
         if not current:
             return
-        text = _render(current)
+        text = _render(current, dated)
         # The facets a chunk was extracted for are recorded with it, not part of its id, so a facet new to the
         # taxonomy or newly consented is extracted alone instead of the whole chunk again.
         key = "\x1f".join([KERNEL.prompt, source.source_id, text])
@@ -265,7 +282,7 @@ def _chunk(source: Source, entries: Sequence[Expression], allowed: frozenset[str
         )
 
     for e in entries:
-        length = len(render_entry(0, e))
+        length = len(render_entry(0, e, dated))
         if current and size + length > CHUNK_CHARS:
             close()
             current, size = [], 0
@@ -842,7 +859,7 @@ def build_profile(
     # Read before the corpus: a source stored again after this is newer than the chunks cut below, and is neither
     # extracted (``_extract_and_merge``) nor settled by this build.
     pending = store.pending_versions([s.source_id for s in sources])
-    chunks = corpus_chunks(store, sources, allowed, settings)
+    chunks = corpus_chunks(store, sources, allowed, settings, store.chunk_facets())
     report.chunks_total = len(chunks)
     store.adopt_legacy_chunks({c.legacy_id: c.chunk_id for c in chunks}, allowed)
     report.chunks_dropped = store.drop_stale_chunks({c.chunk_id for c in chunks})

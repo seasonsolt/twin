@@ -134,8 +134,6 @@ _DIRECTIVE = re.compile(
 )
 WHOLE_MEETING_MIN_CHARS = 8
 WHOLE_MEETING_LINE_CHARS = 120
-# A recorder names its files by the time recorded (``190708_1834``): the day of a meeting stored without one.
-_RECORDED = re.compile(r"(?<!\d)(\d{2})(\d{2})(\d{2})[_-]\d{4}(?!\d)")
 MEETING_KINDS = frozenset({SourceKind.AUDIO, SourceKind.VIDEO})
 # Per offered alternative, added on top of the shared ranking so one alternative's evidence is never crowded out.
 K_ALTERNATIVE_ITEMS = 1
@@ -590,17 +588,9 @@ def _keep(key: Hashable | None, revision: Callable[[], int], read: Callable[[], 
 
 
 def meeting_day(source: Source) -> dt.date | None:
-    """The day of a meeting: its own, else the one its file is named with."""
-    if source.first_date is not None:
-        return source.first_date
-    if (named := date_from_name(source.title)) is not None:
-        return named
-    if (recorded := _RECORDED.search(source.title)) is None:
-        return None
-    try:
-        return dt.date(2000 + int(recorded.group(1)), int(recorded.group(2)), int(recorded.group(3)))
-    except ValueError:
-        return None
+    """The day of a meeting: its own, else the one its file is named with (a twin built before files named like
+    ``190708_1834`` were dated)."""
+    return source.first_date or date_from_name(source.title)
 
 
 def _passages(material: _Material, found: Sequence[Expression]) -> list[Passage]:

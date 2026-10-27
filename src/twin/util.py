@@ -30,6 +30,8 @@ _DATE_PATTERNS = (
     re.compile(r"(?<!\d)(?P<y>\d{4})(?P<sep>[-_.])(?P<m>\d{1,2})(?P=sep)(?P<d>\d{1,2})(?!\d)"),
     re.compile(r"(?<!\d)(?P<y>(?:19|20)\d{2})(?P<m>\d{2})(?P<d>\d{2})(?:\d{4}|\d{6})?(?!\d)"),
     re.compile(r"(?<!\d)(?P<y>\d{4})\s*年\s*(?P<m>\d{1,2})\s*月\s*(?P<d>\d{1,2})(?!\d)"),
+    # A recorder's file named by when it was recorded, the year in two digits: 190708_1834.
+    re.compile(r"(?<!\d)(?P<y>\d{2})(?P<m>\d{2})(?P<d>\d{2})[_-]\d{4}(?!\d)"),
 )
 
 QUOTE_MIN_RATIO = 0.85
@@ -178,7 +180,8 @@ def date_from_name(name: str) -> dt.date | None:
     for pattern in _DATE_PATTERNS:
         for m in pattern.finditer(name):
             try:
-                found = dt.date(int(m["y"]), int(m["m"]), int(m["d"]))
+                year = int(m["y"])
+                found = dt.date(year + 2000 if year < 100 else year, int(m["m"]), int(m["d"]))
             except ValueError:
                 continue
             if best is None or m.start() < best[0]:

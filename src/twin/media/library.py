@@ -49,6 +49,7 @@ from .ingest import (
     extract_flac,
     stopped,
 )
+from .minutes import MINUTES_VERSION, Minutes, read_minutes
 
 logger = logging.getLogger(__name__)
 
@@ -228,6 +229,20 @@ CREATE TABLE IF NOT EXISTS recollections (
     report TEXT NOT NULL,
     rolled_back INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (recording_id, new_transcript)
+);
+-- A meeting's minutes (``media.minutes``): ``auto``, read by the model from the transcript ``transcript_id`` under
+-- the rules ``version``, once per transcript and version whatever came of it. ``points`` is a JSON list of
+-- ``minutes.MinutesPoint``, in the order the meeting said them; empty with ``error`` set when the model could not.
+CREATE TABLE IF NOT EXISTS minutes (
+    recording_id TEXT NOT NULL,
+    origin TEXT NOT NULL,
+    transcript_id TEXT NOT NULL,
+    version TEXT NOT NULL,
+    points TEXT NOT NULL,
+    dropped INTEGER NOT NULL DEFAULT 0,
+    error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (recording_id, origin)
 );
 -- What the library last heard from the collector, e.g. ``asr``: the service the latest transcription came from.
 CREATE TABLE IF NOT EXISTS collector (
@@ -713,7 +728,7 @@ class Library:
                     (recording_id, recording_id),
                 )
                 db.execute("DELETE FROM attributions WHERE recording_id = ?", (recording_id,))
-                for table in ("reviewed", "review_units", "segment_fixes", "denoised"):
+                for table in ("reviewed", "review_units", "segment_fixes", "denoised", "minutes"):
                     db.execute(f"DELETE FROM {table} WHERE recording_id = ?", (recording_id,))
                 db.execute("DELETE FROM voiceprints WHERE recording_id = ?", (recording_id,))
                 db.execute("DELETE FROM recordings WHERE id = ?", (recording_id,))
@@ -845,6 +860,56 @@ class Library:
                 "UPDATE recordings SET named = ? WHERE id = ? AND transcript_id = ?",
                 (transcript_id, recording_id, transcript_id),
             )
+
+    def unminuted(self) -> tuple[Recording, ...]:
+        """Transcribed recordings someone is identified in whose current transcript has no minutes under the current
+        rules yet, latest first: the meetings people ask about most are read first."""
+        with self._db() as db:
+            rows = db.execute(
+                "SELECT * FROM recordings r WHERE r.status = 'ready' AND r.transcript_id IS NOT NULL "
+                "AND EXISTS (SELECT 1 FROM attributions a WHERE a.recording_id = r.id "
+                "AND a.transcript_id = r.transcript_id AND a.decision = 'confirmed') "
+                "AND NOT EXISTS (SELECT 1 FROM minutes m WHERE m.recording_id = r.id AND m.origin = 'auto' "
+                "AND m.transcript_id = r.transcript_id AND m.version = ?) "
+                "ORDER BY COALESCE(r.creation_time, r.created_at) DESC, r.id",
+                (MINUTES_VERSION,),
+            ).fetchall()
+        return tuple(Recording.model_validate(dict(row)) for row in rows)
+
+    def write_minutes(self, recording_id: str, transcript_id: str, minutes: Minutes, error: str = "") -> None:
+        """File the model's minutes of the transcript, replacing those of an earlier transcript or version; with
+        ``error`` and no points when it could not read them, so the transcript is not tried again."""
+        with self._db() as db:
+            db.execute(
+                "INSERT INTO minutes (recording_id, origin, transcript_id, version, points, dropped, error, "
+                "created_at) VALUES (?, 'auto', ?, ?, ?, ?, ?, ?) ON CONFLICT (recording_id, origin) DO UPDATE SET "
+                "transcript_id = excluded.transcript_id, version = excluded.version, points = excluded.points, "
+                "dropped = excluded.dropped, error = excluded.error, created_at = excluded.created_at",
+                (
+                    recording_id,
+                    transcript_id,
+                    minutes.version,
+                    json.dumps([p.model_dump(mode="json") for p in minutes.points], ensure_ascii=False),
+                    minutes.dropped,
+                    error,
+                    _now(),
+                ),
+            )
+
+    def confirmed_names(self, recording: Recording) -> dict[str, str]:
+        """The names of the people the speakers of the recording's transcript are confirmed as, by speaker."""
+        with self._db() as db:
+            rows = db.execute(
+                "SELECT a.speaker_id, p.name FROM attributions a JOIN people p ON p.id = a.person_id "
+                "WHERE a.recording_id = ? AND a.transcript_id = ? AND a.decision = 'confirmed'",
+                (recording.id, recording.transcript_id),
+            ).fetchall()
+        return {str(r[0]): str(r[1]) for r in rows}
+
+    def minutes(self, recording: Recording) -> Minutes | None:
+        """The model's minutes of the recording's current transcript, under whichever rules read them; None when
+        there are none yet."""
+        return read_minutes(self.db_path, [recording.id]).get(recording.id)
 
     def spend(self, kind: str, tokens: int) -> None:
         if tokens > 0:

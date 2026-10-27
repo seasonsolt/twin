@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import threading
 from collections.abc import Iterator
@@ -16,11 +17,14 @@ from test_team import decide, meeting, until, wanted_done
 
 from twin.config import ASRSettings, LibrarySettings, Settings
 from twin.embed import HashingEmbedder
-from twin.llm import FakeLLM
+from twin.llm import FakeLLM, LLMError
+from twin.media import minutes as mm
 from twin.media.clean import Edits
 from twin.media.cues import Cues
 from twin.media.library import Cleaned, Library
+from twin.media.minutes import Draft, Minutes
 from twin.media.team import Team
+from twin.persona import chat as pc
 from twin.persona.store import PersonaStore
 from twin.usage import CallRow, attempt, model_tokens, tracked
 from twin.web import create_app
@@ -148,6 +152,36 @@ def test_model_tokens_leave_embeddings_out_and_count_unreported_usage_by_charact
     assert model_tokens(rows) == 420
 
 
+def test_minutes_wait_for_someone_confirmed_and_are_read_again_for_new_rules(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    library = Library(tmp_path / "library")
+    team = Team(library)
+    older, newer = meeting(library, "2026-03-02 周会.m4a"), meeting(library, "2026-03-09 周会.m4a", lead=[1.0, 0.1, 0])
+    assert library.unminuted() == ()
+    zhang = team.add_person("张总").id
+    for rec in (older, newer):
+        decide(team, rec, "S2", "confirm", zhang)
+    # The latest meeting first: it is the one people ask about.
+    assert [r.id for r in library.unminuted()] == [newer, older]
+    recording = library.get(older)
+    assert recording is not None and recording.transcript_id is not None
+    point = mm.MinutesPoint(kind="决定", text="按季度复盘", lines=[3])
+    library.write_minutes(older, recording.transcript_id, Minutes([point], dropped=1))
+    assert [r.id for r in library.unminuted()] == [newer]
+    found = library.minutes(recording)
+    assert found is not None and found.points == [point] and found.dropped == 1
+    # Minutes of an earlier transcript are not the meeting's any more.
+    library.update(older, transcript_id="another-transcript")
+    assert library.minutes(library.get(older)) is None  # type: ignore[arg-type]
+    library.update(older, transcript_id=recording.transcript_id)
+    monkeypatch.setattr("twin.media.library.MINUTES_VERSION", "minutes-v2")
+    assert {r.id for r in library.unminuted()} == {older, newer}
+    library.delete(older)
+    with library.read() as db:
+        assert db.execute("SELECT COUNT(*) FROM minutes").fetchone()[0] == 0
+
+
 # ------------------------------------------------------------------ the web app
 
 
@@ -159,6 +193,8 @@ class Model(FakeLLM):
         super().__init__(self.answer)
         self.proofreads = 0
         self.namings = 0
+        self.minutes: list[str] = []
+        self.minutes_fail = False
         self.rosters: list[list[str]] = []
         self.lock = threading.Lock()
 
@@ -170,6 +206,16 @@ class Model(FakeLLM):
                 self.rosters.append(sent["roster"])
             said = [int(line.split("|")[0]) for line in sent["meeting"].splitlines() if "张总" in line]
             return {"speakers": [{"speaker": "S2", "name": "张总", "evidence": said, "sure": False}] if said else []}
+        if schema is Draft:
+            with self.lock:
+                self.minutes.append(user)
+            if self.minutes_fail:
+                raise LLMError("模型服务暂时不可用")
+            said = next((line for line in user.splitlines() if "按季度复盘" in line), None)
+            if said is None:
+                return {"points": []}
+            n = int(said.split(".")[0])
+            return {"points": [{"kind": "决定", "text": "按季度复盘", "lines": [n], "quote": "按季度复盘"}]}
         if schema is not Edits:
             return {"items": []}
         with self.lock:
@@ -474,3 +520,60 @@ def test_with_the_automatic_rebuild_off_a_twin_that_only_gains_recordings_keeps_
     # The build becomes idle before its completion is recorded in the library sync ledger.
     until(lambda: idle(web, pid) and len(own_words(tmp_path, pid)) == 2 and not card(web, zhang)["updating"])
     assert not card(web, zhang)["held"] and not card(web, zhang)["updating"]
+
+
+def minuted(web: TestClient, library: Library, rec: str) -> bool:
+    """Whether the meeting's minutes are filed; looking at the library is what starts the reading."""
+    web.get("/api/library")
+    with library.read() as db:
+        return db.execute("SELECT 1 FROM minutes WHERE recording_id = ?", (rec,)).fetchone() is not None
+
+
+def test_a_meeting_is_minuted_once_from_its_proofread_words_and_its_twins_read_the_minutes(
+    web: TestClient, tmp_path: Path, model: Model
+) -> None:
+    library = library_of(tmp_path)
+    rec = misheard(library)
+    zhang = confirm(web, rec, "S2", new_person="张总")["person_id"]
+    pid = web.post(f"/api/library/people/{zhang}/persona", headers=HEADERS).json()["persona_id"]
+    until(lambda: minuted(web, library, rec))
+    # Read after proofreading, from the corrected words, with the people as identified.
+    assert len(model.minutes) == 1 and model.proofreads == 1
+    assert f"张总：{MEANT}" in model.minutes[0] and "会议日期：2026-03-02" in model.minutes[0]
+    recording = library.get(rec)
+    found = library.minutes(recording) if recording else None
+    assert found is not None and [(p.text, p.lines) for p in found.points] == [("按季度复盘", [3])]
+    assert spending(library)["minutes"] > 0
+    until(lambda: idle(web, pid))
+
+    with PersonaStore(tmp_path / "personas" / pid / "twin.db") as store:
+        chat = pc.PersonaChat(store, FakeLLM(lambda *a: {}), HashingEmbedder(), Settings(target_name="张总"))
+        [source] = [s.source_id for s in store.list_sources()]
+        ctx = chat.retrieve("3月2号的会定了哪些事？", today=dt.date(2026, 3, 10))
+        [shown] = ctx.minutes
+        assert [(p.text, ref) for p, ref in shown.points] == [("按季度复盘", f"{source}#00003")]
+        assert f"{source}#00003" in ctx.ids
+        assert f"[{source}#00003] 决定：按季度复盘" in pc.material_text(ctx)
+        # A question naming no meeting is not shown any minutes.
+        assert chat.retrieve("预算怎么看？", today=dt.date(2026, 3, 10)).minutes == []
+
+    # Another decision about the meeting does not read it again.
+    confirm(web, rec, "S1", new_person="李总")
+    web.get("/api/library")
+    assert len(model.minutes) == 1
+
+
+def test_minutes_the_model_fails_on_are_tried_again_later_then_given_up(
+    web: TestClient, tmp_path: Path, model: Model, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("twin.web.library.MINUTES_RETRY_SECONDS", 0.0)
+    monkeypatch.setattr("twin.web.library.MINUTES_TRIES", 2)
+    model.minutes_fail = True
+    library = library_of(tmp_path)
+    rec = misheard(library)
+    confirm(web, rec, "S2", new_person="张总")
+    until(lambda: minuted(web, library, rec))
+    assert len(model.minutes) == 2
+    assert library.unminuted() == ()
+    with library.read() as db:
+        assert db.execute("SELECT points, error FROM minutes").fetchone()[0] == "[]"

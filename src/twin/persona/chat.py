@@ -33,6 +33,7 @@ from pydantic import ValidationError
 from ..config import Settings
 from ..embed import Embedder, EmbedError, Matrix, embedder_fingerprint
 from ..llm import LLM, LLMError, hedged_stream
+from ..media.minutes import MinutesPoint, read_minutes, recording_of
 from ..usage import default_stage
 from ..util import Progress, date_from_name
 from . import gate
@@ -134,6 +135,10 @@ _DIRECTIVE = re.compile(
 )
 WHOLE_MEETING_MIN_CHARS = 8
 WHOLE_MEETING_LINE_CHARS = 120
+# The minutes of the meetings a question names (``media.minutes``) come before their lines: what a meeting settled is
+# in them whole, where lines found by the question show a part. Meetings are taken latest first up to this many points
+# in all, so a question about a month does not drown the lines.
+MAX_MINUTES_POINTS = 120
 MEETING_KINDS = frozenset({SourceKind.AUDIO, SourceKind.VIDEO})
 # Per offered alternative, added on top of the shared ranking so one alternative's evidence is never crowded out.
 K_ALTERNATIVE_ITEMS = 1
@@ -315,6 +320,16 @@ class Passage:
     lines: tuple[Expression, ...]
 
 
+@dataclass(frozen=True)
+class MeetingMinutes:
+    """The minutes of one meeting of the twin's: each point with the line it can be cited by (None when the twin does
+    not hold that line, as when the meeting was transcribed again after its last build), in the conversation's view."""
+
+    title: str
+    day: dt.date | None
+    points: tuple[tuple[MinutesPoint, str | None], ...]
+
+
 @dataclass
 class PersonaContext:
     items: list[tuple[PersonaItem, float]]
@@ -370,6 +385,8 @@ class PersonaContext:
     trusted: set[str] = field(default_factory=set)
     # The meetings' lines around what was found there (``_passages``), shown in place of the lines alone.
     passages: list[Passage] = field(default_factory=list)
+    # The minutes of the meetings the question names, in the order they were held.
+    minutes: list[MeetingMinutes] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         items = [i for i, _ in self.items] + self.core
@@ -379,6 +396,7 @@ class PersonaContext:
             | {e.expression_id for e, _ in self.others}
             | {ledger_ref(e) for e, _ in self.ledger}
             | {e.expression_id for p in self.passages for e in p.lines}
+            | {ref for m in self.minutes for _, ref in m.points if ref is not None}
         )
         self.trusted = (
             {i.item_id for i in items if i.trusted}
@@ -519,8 +537,11 @@ class _Material:
     # Every line of the meetings in the view, by source and number, and each meeting's title (``_passages``).
     lines: dict[tuple[str, int], Expression] = field(default_factory=dict)
     meetings: dict[str, str] = field(default_factory=dict)
-    # The days there were meetings, in order (``meeting_window``).
+    # The days there were meetings, in order (``meeting_window``), and each meeting's.
     days: list[dt.date] = field(default_factory=list)
+    meeting_days: dict[str, dt.date] = field(default_factory=dict)
+    # Text as the conversation's view shows it (``ExpressionView.mask``): other people's names replaced.
+    mask: Callable[[str], str] = str
 
     def keywords_only(self) -> _Material:
         return replace(
@@ -766,6 +787,7 @@ class PersonaChat:
         self.embedder = embedder
         self.settings = settings
         self.ledger = ledger and audience == SELF_AUDIENCE
+        self.library_db = gate.library_db(store)
 
     def retrieve(
         self,
@@ -858,6 +880,8 @@ class PersonaChat:
             {(e.source_id, e.idx): e for e in [*expressions.values(), *others.values()] if e.source_id in meetings},
             meetings,
             sorted({day for day in days.values() if as_of is None or day <= as_of}),
+            {sid: day for sid, day in days.items() if as_of is None or day <= as_of},
+            view.mask,
         )
 
     def _ranked(
@@ -929,7 +953,35 @@ class PersonaChat:
             audience=self.audience,
             assistant=self.assistant,
             passages=passages,
+            minutes=self._minutes(material, named) if named is not None else [],
         )
+
+    def _minutes(self, material: _Material, named: tuple[dt.date, dt.date]) -> list[MeetingMinutes]:
+        """The minutes of the twin's meetings held in ``named``, read from its library at each question: a meeting's
+        minutes are usually read after the twin was built from it."""
+        if self.library_db is None:
+            return []
+        held = sorted(
+            ((day, sid) for sid, day in material.meeting_days.items() if named[0] <= day <= named[1]), reverse=True
+        )
+        recordings = {sid: recording for _, sid in held if (recording := recording_of(sid)) is not None}
+        found = read_minutes(self.library_db, set(recordings.values()))
+        shown: list[MeetingMinutes] = []
+        budget = MAX_MINUTES_POINTS
+        for day, sid in held:
+            minutes = found.get(recordings.get(sid, ""))
+            if minutes is None or not minutes.points or len(minutes.points) > budget:
+                continue
+            budget -= len(minutes.points)
+            points = []
+            for point in minutes.points:
+                line = next((n for n in point.lines if (sid, n) in material.lines), None)
+                masked = point.model_copy(
+                    update={"text": material.mask(point.text), "owner": material.mask(point.owner)}
+                )
+                points.append((masked, None if line is None else f"{sid}#{line:05d}"))
+            shown.append(MeetingMinutes(material.meetings[sid], day, tuple(points)))
+        return shown[::-1]
 
     def _items(self, as_of: dt.date | None, view: ExpressionView, hidden: PrivateWords) -> dict[str, PersonaItem]:
         """The profile items an answer may use: those of the conversation's tier, without the evidence of ``hidden``
@@ -1714,6 +1766,11 @@ def _material_lines(ctx: PersonaContext) -> list[str]:
     own = [e for e, _ in ctx.expressions if not e.narrated and e.expression_id not in shown]
     narrated = [e for e, _ in ctx.expressions if e.narrated and e.expression_id not in shown]
     others = [e for e, _ in ctx.others if e.expression_id not in shown]
+    if ctx.minutes:
+        lines.append("会议纪要（模型按整场转写自动整理，按会上说到的先后；方括号里是出处，可引用）：")
+        for m in ctx.minutes:
+            lines.append(f"- 会议 {f'{m.day.isoformat()} ' if m.day else ''}{m.title}：")
+            lines.extend(_render_point(point, ref) for point, ref in m.points)
     if ctx.passages:
         lines.append("会议片段（按会上说话的顺序；“我”是本人，其他人说的话是别人说的，不是我的观点或经历）：")
         if ctx.named is not None:
@@ -1747,6 +1804,15 @@ def _material_lines(ctx: PersonaContext) -> list[str]:
         lines.append("会上的决定、承诺、异议和进展（承诺账本；状态是程序按之后会上的进展算出的）：")
         lines.extend(_render_ledger(e, status, today) for e, status in ctx.ledger)
     return lines
+
+
+def _render_point(point: MinutesPoint, ref: str | None) -> str:
+    extra = "；".join(
+        part
+        for part in (f"负责：{point.owner}" if point.owner else "", f"期限：{point.due}" if point.due else "")
+        if part
+    )
+    return f"  - {f'[{ref}] ' if ref else ''}{point.kind}：{point.text}{f'（{extra}）' if extra else ''}"
 
 
 def material_text(ctx: PersonaContext) -> str:

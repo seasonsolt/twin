@@ -39,6 +39,17 @@ def link(store: PersonaStore, library_db: Path, persona_id: str) -> None:
     store.set_meta(MODE, MEETING_RECORD)
 
 
+def library_db(store: PersonaStore) -> Path | None:
+    """The library the twin is made from; None for a twin not made from one."""
+    linked = store.get_meta(LINK)
+    if not linked:
+        return None
+    try:
+        return (store.path.resolve().parent / str(json.loads(linked)["db"])).resolve()
+    except (ValueError, KeyError, TypeError):
+        return None
+
+
 def version(store: PersonaStore) -> int | None:
     """The memory version the twin answers from, its last build; None for a twin not made from a library.
     ``MemoryUpdating`` when the library cannot be read."""

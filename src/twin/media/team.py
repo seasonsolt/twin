@@ -37,6 +37,7 @@ from .collector import ATTRIBUTION_VERSION, CLEANUP_VERSION, LEGACY_ATTRIBUTION
 from .cues import Cue
 from .ingest import Segment, Speaker, timestamp
 from .library import Library, Recording, Transcript
+from .minutes import SOURCE_PREFIX as SOURCE_PREFIX
 
 Action = Literal["confirm", "unknown", "mixed", "reject", "clear"]
 # How sure voice alone is of a speaker (``tier``): decided without asking, offered to confirm with one key, asked.
@@ -130,8 +131,6 @@ RETIRE_CORRECTED = 3
 # pilot library a third of the undecided speech was surely or likely someone already past it. A guess until twins built
 # from more or less speech are compared.
 ENOUGH_SECONDS = 1800.0
-# Twin sources made from the library; the rest of the id names the recording and the person's own segments.
-SOURCE_PREFIX = "src_lib_"
 
 
 class Stale(Exception):

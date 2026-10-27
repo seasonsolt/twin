@@ -13,6 +13,7 @@ import { App } from '../App';
 import { AuthGate } from '../features/auth/AuthGate';
 import { Login } from '../features/auth/Login';
 import { api } from '../lib/api';
+import { browser } from '../lib/base';
 import { getPersonaId, setPersonaId } from '../lib/persona';
 import { useAuth } from '../stores/auth';
 import { useWelcome } from '../stores/welcome';
@@ -49,7 +50,9 @@ let loggedIn: boolean;
 let whoami: Record<string, unknown>;
 let items: Persona[];
 let fetcher: ReturnType<typeof vi.fn>;
+let signOutPage: string | null;
 beforeEach(() => {
+  signOutPage = null;
   methods = emailOnly;
   loggedIn = false;
   whoami = member;
@@ -74,7 +77,7 @@ beforeEach(() => {
     }
     if (path === '/api/auth/logout') {
       loggedIn = false;
-      return json({ logged_out: true });
+      return json({ logged_out: true, redirect: signOutPage });
     }
     if (!loggedIn)
       return json({ detail: '请先登录', code: 'login_required' }, 401);
@@ -136,6 +139,7 @@ afterEach(() => {
   setPersonaId('default');
   usePersonas.setState({ id: 'default', items: [] });
   useAuth.setState({ identity: null });
+  vi.restoreAllMocks();
 });
 async function requestCode(user: ReturnType<typeof userEvent.setup>) {
   const email = await screen.findByRole('textbox', { name: '邮箱' });
@@ -350,6 +354,22 @@ it("shows the single sign-on name and signs out back to twin's own sign-in page"
   expect(loggedIn).toBe(false);
   // Signed out on purpose: whoever signs in next starts afresh, not on the page left open.
   expect(window.location.hash).toBe('#/login');
+});
+
+it('signs out of the company sign-in too, which brings the page back to twin', async () => {
+  methods = companySignIn;
+  loggedIn = true;
+  whoami = { ...member, email: 'sso:u-1', name: '张三', provider: 'sso' };
+  signOutPage =
+    'https://auth.example.com/sso/signout?back=https://example.com/twin/';
+  const leave = vi.spyOn(browser, 'leave').mockImplementation(() => {});
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole('button', { name: '账户' }));
+  await user.click(screen.getByRole('button', { name: '退出登录' }));
+  await waitFor(() => expect(leave).toHaveBeenCalledWith(signOutPage));
+  expect(loggedIn).toBe(false);
+  expect(useAuth.getState().identity).toBeNull();
 });
 
 it("offers the company sign-in as a form posted on this site, beside twin's own account", async () => {

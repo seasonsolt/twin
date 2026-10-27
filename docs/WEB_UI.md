@@ -157,7 +157,7 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 
 `AuthGate` 先读取 `/api/whoami`，`401 {code:"login_required"}` 时显示 twin 自己的登录页，不再跳往别的页面；登录页读 `/api/auth/methods` 决定显示哪些方式（读不到时按只有邮箱处理）。有统一身份或账号密码时标题为“登录 twin”，统一身份按钮在上为主操作，下面“或用 twin 账号登录”；只有邮箱时标题为“用邮箱登录”。有统一身份时，账号密码和邮箱验证码都收在“或用 twin 账号登录”下面，点开才展开；没有统一身份时直接显示。账号输入 autocomplete=username，密码 type=password、autocomplete=current-password，登录成功回到要去的页面（见开头），没有时进入团队页。邮箱输入 type=email、autocomplete=email，16px；获取验证码后显示 6 位 inputmode=numeric、autocomplete=one-time-code 输入，支持粘贴和前导零。“重新发送”按实际截止时间倒计时 60 秒，“换个邮箱”返回。未允许用户看到“已加入等候名单”、邮箱与“开放后会第一时间通知你”，不显示验证码输入。错误使用中文普通文本。登录页左侧（手机为顶部色带）是舞台：标语“最懂你的，是另一个你。”、一句说明（手机隐藏）和“个人分身 → 超级个体 → 超级组织”演进线；右侧是登录方式，卡片里只有标题和登录方式（没有“欢迎回来”之类的副标题），下面一行“登录遇到问题？请联系管理员”，底部是配色选择（登录后在账户菜单里也能换）。
 
-会话只用 HttpOnly cookie，前端不存 token。普通 API、媒体 fetch、分片上传及资产 XHR 遇到 login_required 时清空当前身份和分身内存状态、卸载内容并回到登录；切换页显示小号账号和“退出登录”，任何登录方式都显示；退出时 `/api/auth/logout` 同时清掉 twin 会话和 SSO 会话 cookie（`Path=/`），回到 twin 登录页，同时清空上传列表和团队名册，下一个登录的人看不到上一个人的。身份恢复后先加载可见分身，再挂载页面；no_persona 对带企业账号（邮箱或工号）的成员先进入“会议里找自己”（`MemberVoice`），可跳过，再显示新建分身流程，不回退 default；过期的 persona 404 会重新加载列表并选首个可见分身。`/api/whoami` 另带 `address`（企业邮箱）和 `account`（工号）。
+会话只用 HttpOnly cookie，前端不存 token。普通 API、媒体 fetch、分片上传及资产 XHR 遇到 login_required 时清空当前身份和分身内存状态、卸载内容并回到登录；切换页显示小号账号和“退出登录”，任何登录方式都显示；退出时 `/api/auth/logout` 同时清掉 twin 会话和 SSO 会话 cookie（`Path=/`），回到 twin 登录页；配了 `[auth.sso] logout_url` 时整页跳往认证中心的登出页，结束认证中心的会话后回到 twin，否则下次点统一身份登录会直接以同一账号进来，同时清空上传列表和团队名册，下一个登录的人看不到上一个人的。身份恢复后先加载可见分身，再挂载页面；no_persona 对带企业账号（邮箱或工号）的成员先进入“会议里找自己”（`MemberVoice`），可跳过，再显示新建分身流程，不回退 default；过期的 persona 404 会重新加载列表并选首个可见分身。`/api/whoami` 另带 `address`（企业邮箱）和 `account`（工号）。
 
 | 方法/路径 | 契约 |
 | --- | --- |
@@ -165,7 +165,7 @@ quick/page/dialog 退出为 120/160/180ms，默认 crossfade 150ms。`useMotionP
 | `POST /api/auth/verify` | `{email,code}` → `{email,admin}` 并设置 twin_session cookie；代码 10 分钟有效，5 次错误后销毁 |
 | `GET /api/auth/methods` | 未登录也可读：`{sso:{start_url,login_url}|null, password, email, team_name}`，登录页据此显示方式（`team_name` 登录前就能读，登录页目前不显示） |
 | `POST /api/auth/password` | `{username,password}` → 身份并设置 twin_session cookie；错误统一为“账号或密码不对”，同一账号 15 分钟 5 次、同一地址一小时 30 次失败后 429 |
-| `POST /api/auth/logout` | 删除服务端会话并清 twin_session；SSO 下同时清那个应用的会话 cookie（`Path=/`） |
+| `POST /api/auth/logout` | 删除服务端会话并清 twin_session；SSO 下同时清那个应用的会话 cookie（`Path=/`），配了 `logout_url` 时返回 `redirect`，页面接着跳往认证中心登出，再回到 twin |
 | `GET /api/whoami` | `{email,admin,auth_enabled,features,team_name}`；启用登录且未登录返回 401；`team_name` 是系统设置里的团队名，侧栏和首次进入页的顶部读它，没设置时显示“我的团队” |
 | `GET /api/admin/waitlist` | 仅管理员，`[{email,created_at}]`（Unix 秒时间戳）；添加允许邮箱需改配置并重启 |
 

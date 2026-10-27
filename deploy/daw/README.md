@@ -62,6 +62,7 @@ cookie = "audio_studio_session"
 start_url = "/auth/start?next=/twin/"  # 登录页的统一身份按钮直接交给 audio-studio 跳认证中心
 sign_in_origin = "https://center.njxjjt.com"  # 认证中心的源：浏览器只在 twin 的 CSP form-action 放行它时才跟随跳转；不写则按钮退回链接到 login_url
 login_url = "/login?next=/twin/"
+logout_url = "https://auth.njxjjt.com/sso/signout?back=https://daw.xjjk.com/twin/"  # 退出时一并退出认证中心（和 multica 一样），否则再点登录会直接以同一账号进来
 ```
 
 在 daw 上创建 twin 账号（密码在终端输入）：`sudo -u ubuntu /data/twin/current/.venv/bin/twin --config /data/twin/twin.toml account add <账号> --name <名字>`。

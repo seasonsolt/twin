@@ -371,13 +371,16 @@ class SSOSettings(BaseModel):
     link to `login_url`, that app's sign-in page. Signing out of twin also ends that app's session on this site.
     `start_url` answers with a redirect to the company sign-in, which the browser follows only when twin's pages
     allow forms to lead there: `sign_in_origin` names it (e.g. https://center.example.com), and without it the
-    button stays a link to `login_url`.
+    button stays a link to `login_url`. Signing out also ends the company sign-in when `logout_url` names its sign-out
+    page with the way back to twin (e.g. https://auth.example.com/sso/signout?back=https://example.com/twin/);
+    without it, the next sign-in passes straight through as the same person.
     """
 
     me_url: str = ""
     login_url: str = ""
     start_url: str = ""
     sign_in_origin: str = ""
+    logout_url: str = ""
     cookie: str = ""
     cache_seconds: int = Field(default=60, ge=0, le=3600)
 
@@ -417,6 +420,10 @@ class AuthSettings(BaseModel):
                     raise ValueError(f"[auth.sso] {key} 必须是本站路径，例如 /login?next=/twin/")
             if sso.sign_in_origin and not re.fullmatch(r"https?://[A-Za-z0-9.-]+(:\d{1,5})?", sso.sign_in_origin):
                 raise ValueError("[auth.sso] sign_in_origin 必须是认证中心的源，例如 https://center.example.com")
+            if sso.logout_url and not re.fullmatch(r"https?://[A-Za-z0-9.-]+(:\d{1,5})?/\S*", sso.logout_url):
+                raise ValueError(
+                    "[auth.sso] logout_url 必须是认证中心的登出地址，例如 https://auth.example.com/sso/signout?back=…"
+                )
             return self
         if (
             self.enabled

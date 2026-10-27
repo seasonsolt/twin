@@ -1134,6 +1134,22 @@ def test_signing_out_ends_twins_session_and_the_sso_session(both: tuple[TestClie
     calls = login.calls
     web.cookies.set("sso", "cookie-a")  # the cached answer for that cookie was dropped too
     assert web.get("/api/whoami").json()["email"] == "sso:1001" and login.calls == calls + 1
+    assert out.json() == {"logged_out": True, "redirect": None}  # no sign-out page of the company sign-in given
+
+
+def test_signing_out_goes_on_to_the_company_sign_ins_sign_out(both: tuple[TestClient, FakeLogin]) -> None:
+    # The company sign-in keeps its own session: without its sign-out the next sign-in passes straight through.
+    web, _ = both
+    page = "https://auth.example.com/sso/signout?back=https://twin.example.com/twin/"
+    auth(web).settings.sso.logout_url = page
+    web.cookies.set("sso", "cookie-a")
+    assert web.post("/api/auth/logout", headers=CSRF).json() == {"logged_out": True, "redirect": page}
+    with pytest.raises(ValidationError, match="logout_url"):
+        AuthSettings(
+            enabled=True,
+            provider="sso",
+            sso=SSOSettings(me_url="http://127.0.0.1:1/me", cookie="s", login_url="/login", logout_url="/sso/signout"),
+        )
 
 
 def test_wrong_passwords_are_limited_per_account(both: tuple[TestClient, FakeLogin]) -> None:

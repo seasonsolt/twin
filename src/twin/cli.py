@@ -160,6 +160,7 @@ api_key_env = "TWIN_EMBED_KEY"
 # login_url = "/login?next=/twin/"  # 未登录时浏览器跳往的本站路径
 # start_url = "/auth/start?next=/twin/"  # 可选：登录按钮直接 POST 到这里，由那个应用跳转认证中心
 # sign_in_origin = "https://center.example.com"  # 配 start_url 时必填：认证中心的源，加进 CSP form-action
+# logout_url = "https://auth.example.com/sso/signout?back=https://example.com/twin/"  # 可选：退出时一并退出认证中心
 # cache_seconds = 60
 
 # [wecom]  # 可选：SSO 不给头像时，按工号（即企业微信账号）从企业微信通讯录取头像，给填了工号的分身换上

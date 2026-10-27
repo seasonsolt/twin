@@ -7,3 +7,10 @@ export function basePath(baseURI = document.baseURI) {
 export function withBase(path: string, base = basePath()) {
   return path.startsWith('/') && !path.startsWith('//') ? base + path : path;
 }
+
+/** Leaves twin for another site (a whole-page navigation), kept apart so tests can watch where the page goes. */
+export const browser = {
+  leave(url: string) {
+    window.location.assign(url);
+  },
+};

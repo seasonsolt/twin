@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { api, beginApiSession } from '../lib/api';
+import { browser } from '../lib/base';
 import { usePersonas } from './personas';
 import { useWelcome } from './welcome';
 
@@ -75,9 +76,14 @@ export const useAuth = create<{
   },
   async logout() {
     const current = version;
-    await api('/api/auth/logout', { method: 'POST' });
+    const out = await api<{ redirect?: string | null } | null>(
+      '/api/auth/logout',
+      { method: 'POST' },
+    );
     if (current !== version) return;
     set({ signedOut: true });
     get().clear();
+    // The company sign-in keeps its own session; its sign-out ends it and comes back to twin's sign-in page.
+    if (out?.redirect) browser.leave(out.redirect);
   },
 }));

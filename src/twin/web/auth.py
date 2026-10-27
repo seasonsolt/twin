@@ -523,9 +523,11 @@ class Auth:
             return self.account_identity(account)
 
         @app.post("/api/auth/logout")
-        def logout(request: Request, response: Response) -> dict[str, bool]:
+        def logout(request: Request, response: Response) -> dict[str, Any]:
             """Ends twin's own session and, under single sign-on, the other app's session on this site too, so the
-            next visit shows the sign-in page instead of signing straight back in."""
+            next visit shows the sign-in page instead of signing straight back in. The company sign-in keeps a
+            session of its own, which would pass the next sign-in straight through as the same person: with
+            `logout_url` set, the page goes on to its sign-out (`redirect`), which comes back to twin."""
             if self.email or self.passwords:
                 with self.database() as db:
                     db.execute("DELETE FROM sessions WHERE hash = ?", (digest(request.cookies.get(COOKIE, "")),))
@@ -542,7 +544,7 @@ class Auth:
                     with self.lock:
                         self.sso_cache.pop(digest(token), None)
                 response.delete_cookie(cookie, path="/", httponly=True, secure=secure_cookie(request), samesite="lax")
-            return {"logged_out": True}
+            return {"logged_out": True, "redirect": (self.sso and self.settings.sso.logout_url) or None}
 
         @app.get("/api/whoami")
         def whoami(request: Request) -> Response:

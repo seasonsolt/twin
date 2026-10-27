@@ -38,7 +38,7 @@ from ..teamanswers import TeamAnswers
 from ..teamdb import TeamDB, team_path
 from ..usage import UsageLedger, UsageRecorder, install_default
 from . import ask as ask_routes
-from . import assets, gpu, library, media, persona, system, team_answers, voice
+from . import assets, gpu, library, media, minutes, persona, system, team_answers, voice
 from . import delegation as delegation_routes
 from . import lenses as lens_routes
 from .auth import Auth, AuthMiddleware, forwarded_prefix
@@ -661,6 +661,7 @@ def create_app(
     register_all_conversations(app, registry, team)
     register_all_commitments(app, registry)
     libraries = library.register(app, settings, jobs, registry, backends.llm, system_settings.limits, team)
+    minutes.register(app, libraries)
     ask_routes.register(app, registry, finder, answers, backends, libraries)
     team_answers.register_all(app, registry, team, desk_for, twin_name)
     voice.register(app, settings, libraries, registry)

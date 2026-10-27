@@ -37,6 +37,7 @@ import {
   TRANSCRIPT_ACCEPT,
   isTranscript,
 } from '../features/library/ImportTranscript';
+import { MatchMinutes } from '../features/library/MatchMinutes';
 import { UploadList } from '../features/library/UploadList';
 import { useUploads } from '../features/library/useUploads';
 
@@ -72,6 +73,8 @@ export interface Recording {
   // is gone, or not sound that can be read, which a retry would only fail on again).
   retryable?: boolean;
   reupload?: boolean;
+  // Minutes someone wrote and brought in (human), the model's own (auto), or none yet.
+  minutes?: 'human' | 'auto' | '';
 }
 /** Recordings the current transcription service would transcribe anew (``Library.recollectable``). */
 interface Recollection {
@@ -97,6 +100,8 @@ export interface LibraryState {
   recordings: Recording[];
   pending: number;
   max_pending: number;
+  // Written minutes the viewer brought in that wait to be put on a recording.
+  minutes_pending?: number;
   asr: boolean;
   capacity: {
     free_bytes: number;
@@ -174,6 +179,13 @@ export function Library() {
   // 重新上传: the failed recording the file chosen next takes the place of.
   const reuploadInput = useRef<HTMLInputElement>(null);
   const [replacing, setReplacing] = useState<Recording | null>(null);
+  // Written minutes: many read for the recordings of their days, or one put on the recording chosen.
+  const minutesInput = useRef<HTMLInputElement>(null);
+  const writtenInput = useRef<HTMLInputElement>(null);
+  const [writtenFor, setWrittenFor] = useState<Recording | null>(null);
+  const [matching, setMatching] = useState(false);
+  const [skipped, setSkipped] = useState(0);
+  const [reading, setReading] = useState(false);
   // Transcripts chosen or dropped, brought in one at a time.
   const [transcripts, setTranscripts] = useState<File[]>([]);
   // Transcripts picked or dropped elsewhere in the app come here to be looked at.
@@ -225,10 +237,75 @@ export function Library() {
       : 0;
   usePolling(follow, interval);
 
-  // Recordings upload; a transcript is read and looked at first, in a dialog of its own.
+  // Text files are read as written minutes for the recordings of their days; those that are transcripts (speakers
+  // taking turns) come back to be looked at as one, in a dialog of their own.
+  const readMinutes = async (files: File[]) => {
+    if (!files.length) return;
+    setProblem('');
+    setReading(true);
+    const data = new FormData();
+    for (const file of files) data.append('files', file);
+    try {
+      const read = await api<{
+        transcripts: string[];
+        unreadable: string[];
+        skipped: number;
+        added: number;
+      }>('/api/library/minutes/read', { method: 'POST', form: data });
+      const named = new Set(read.transcripts);
+      const texts = files.filter((file) => named.has(file.name));
+      if (texts.length) setTranscripts((current) => [...current, ...texts]);
+      if (read.unreadable.length) setProblem(read.unreadable.join('；'));
+      setSkipped(read.skipped);
+      if (read.added || read.skipped) setMatching(true);
+    } catch (failure) {
+      setProblem(failure instanceof Error ? failure.message : '读取纪要失败');
+    } finally {
+      setReading(false);
+    }
+    await load();
+  };
+  const addWritten = async (recording: Recording, files: File[]) => {
+    setWrittenFor(null);
+    if (!files.length) return;
+    setProblem('');
+    const data = new FormData();
+    data.append('file', files[0]);
+    try {
+      await api(
+        `/api/library/recordings/${encodeURIComponent(recording.id)}/minutes`,
+        { method: 'POST', form: data },
+      );
+      toast('纪要已挂上', 'success');
+    } catch (failure) {
+      setProblem(failure instanceof Error ? failure.message : '添加纪要失败');
+    }
+    await load();
+  };
+  const removeWritten = async (recording: Recording) => {
+    if (
+      !(await confirm({
+        title: `移除「${recording.filename}」的纪要？`,
+        body: '分身改用自动整理的纪要',
+        confirmLabel: '移除纪要',
+        tone: 'danger',
+      }))
+    )
+      return;
+    setProblem('');
+    try {
+      await api(
+        `/api/library/recordings/${encodeURIComponent(recording.id)}/minutes`,
+        { method: 'DELETE' },
+      );
+    } catch (failure) {
+      setProblem(failure instanceof Error ? failure.message : '移除纪要失败');
+    }
+    await load();
+  };
+  // Recordings upload; text files are read as minutes first.
   const take = (files: File[]) => {
-    const texts = files.filter(isTranscript);
-    if (texts.length) setTranscripts((current) => [...current, ...texts]);
+    void readMinutes(files.filter(isTranscript));
     void add(files.filter((file) => !isTranscript(file)));
   };
   const retry = async (recording: Recording) => {
@@ -364,6 +441,10 @@ export function Library() {
               label="更多"
               items={[
                 {
+                  label: '上传纪要',
+                  onSelect: () => minutesInput.current?.click(),
+                },
+                {
                   label: '导入转写稿',
                   onSelect: () => transcriptInput.current?.click(),
                 },
@@ -395,6 +476,19 @@ export function Library() {
           onFiles={(files) => replacing && void reupload(replacing, files)}
         />
         <FileInput
+          ref={minutesInput}
+          label="选择纪要"
+          accept={TRANSCRIPT_ACCEPT}
+          multiple
+          onFiles={(files) => void readMinutes(files)}
+        />
+        <FileInput
+          ref={writtenInput}
+          label="选择这场会的纪要"
+          accept={TRANSCRIPT_ACCEPT}
+          onFiles={(files) => writtenFor && void addWritten(writtenFor, files)}
+        />
+        <FileInput
           ref={transcriptInput}
           label="选择转写稿"
           accept={TRANSCRIPT_ACCEPT}
@@ -412,6 +506,29 @@ export function Library() {
           <Text role="status" size="sm" tone="secondary">
             {notice}
           </Text>
+        )}
+        {reading && (
+          <Text role="status" size="sm" tone="secondary">
+            读纪要中…
+          </Text>
+        )}
+        {!!library?.minutes_pending && !matching && (
+          <Notice
+            actions={
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  setSkipped(0);
+                  setMatching(true);
+                }}
+              >
+                去选
+              </Button>
+            }
+          >
+            {library.minutes_pending} 份纪要待配对
+          </Notice>
         )}
         {library?.quota?.exhausted && (
           <Notice>{quotaNotice(library.quota)}</Notice>
@@ -512,6 +629,7 @@ export function Library() {
                           {recording.kind === 'transcript' && (
                             <Badge>转写稿</Badge>
                           )}
+                          {recording.minutes === 'human' && <Badge>纪要</Badge>}
                           {label && <Badge tone={label[1]}>{label[0]}</Badge>}
                           {recollectingIds.has(recording.id) && (
                             <Badge>重新采集中</Badge>
@@ -577,6 +695,29 @@ export function Library() {
                                         label: '重新采集',
                                         onSelect: () =>
                                           void collectAgain(recording),
+                                      },
+                                    ]
+                                  : []),
+                                ...(ready
+                                  ? [
+                                      {
+                                        label:
+                                          recording.minutes === 'human'
+                                            ? '换一份纪要'
+                                            : '添加纪要',
+                                        onSelect: () => {
+                                          setWrittenFor(recording);
+                                          writtenInput.current?.click();
+                                        },
+                                      },
+                                    ]
+                                  : []),
+                                ...(recording.minutes === 'human'
+                                  ? [
+                                      {
+                                        label: '移除纪要',
+                                        onSelect: () =>
+                                          void removeWritten(recording),
                                       },
                                     ]
                                   : []),
@@ -647,6 +788,16 @@ export function Library() {
                 : '导入了，说话人都认出来了',
             'success',
           );
+        }}
+      />
+      <MatchMinutes
+        open={matching}
+        skipped={skipped}
+        onOpenChange={setMatching}
+        onAttached={(attached) => {
+          setMatching(false);
+          void load();
+          toast(`挂上了 ${attached} 份纪要`, 'success');
         }}
       />
       <Dialog

@@ -52,7 +52,7 @@ from ..media.clean import BATCH, clean_segments
 from ..media.cues import Named, name_speakers
 from ..media.ingest import CommandTranscriber, make_transcriber, probe_seconds
 from ..media.library import TEAM, Cleaned, Library, Recording, TranscriptionError, owner_key
-from ..media.minutes import MINUTES_VERSION, Line, Minutes, meeting_day, summarize
+from ..media.minutes import MINUTES_VERSION, WRITTEN_VERSION, Line, Minutes, meeting_day, read_written, summarize
 from ..media.review import Reviews, cut_parts
 from ..media.schema import AVATAR_GENDERS, default_avatar
 from ..media.team import SOURCE_PREFIX, Gender, Stale, Team, TwinSource
@@ -834,14 +834,20 @@ class Libraries:
             library = self.library(owner)
             unnamed = library.unnamed()
             unproofread = () if unnamed else library.unproofread()
-            # Minutes are read from the proofread words, once there is nothing left to proofread.
+            # Minutes are read from the proofread words, once there is nothing left to proofread: written ones first.
             now = time.time()
-            unminuted = tuple(
-                r
-                for r in ([] if unnamed or unproofread else library.unminuted())
-                if now - self.minutes_failed.get(r.id, (0, 0.0))[1] >= MINUTES_RETRY_SECONDS
-            )
-            waiting = unnamed or unproofread or unminuted
+
+            def due(origin: str, found: Callable[[], tuple[Recording, ...]]) -> tuple[Recording, ...]:
+                if unnamed or unproofread:
+                    return ()
+                failed = self.minutes_failed
+                return tuple(
+                    r for r in found() if now - failed.get(f"{origin}:{r.id}", (0, 0.0))[1] >= MINUTES_RETRY_SECONDS
+                )
+
+            unread = due("human", library.unread_written)
+            unminuted = () if unread else due("auto", library.unminuted)
+            waiting = unnamed or unproofread or unread or unminuted
             if not waiting or self.quota(owner)["exhausted"]:
                 return
             try:
@@ -853,6 +859,8 @@ class Libraries:
                 title, run = f"辨认说话人 {recording.filename}", self.run_naming
             elif unproofread:
                 title, run = f"校对 {recording.filename}", self.run_proofread
+            elif unread:
+                title, run = f"整理人写纪要 {recording.filename}", self.run_written
             else:
                 title, run = f"整理纪要 {recording.filename}", self.run_minutes
             with contextlib.suppress(TooManyJobs):
@@ -947,8 +955,8 @@ class Libraries:
             except Exception as error:
                 logger.warning("minutes of %s could not be read", recording_id, exc_info=True)
                 with self.lock:
-                    tries = self.minutes_failed.get(recording_id, (0, 0.0))[0] + 1
-                    self.minutes_failed[recording_id] = (tries, time.time())
+                    tries = self.minutes_failed.get(f"auto:{recording_id}", (0, 0.0))[0] + 1
+                    self.minutes_failed[f"auto:{recording_id}"] = (tries, time.time())
                 if tries >= MINUTES_TRIES:
                     library.write_minutes(recording_id, transcript.id, Minutes(), str(error)[:200] or "整理失败")
                 log("整理纪要失败，稍后再试；聊天照常按原话回答")
@@ -957,8 +965,70 @@ class Libraries:
                 library.spend("minutes", model_tokens(rows))
             library.write_minutes(recording_id, transcript.id, found)
             with self.lock:
-                self.minutes_failed.pop(recording_id, None)
+                self.minutes_failed.pop(f"auto:{recording_id}", None)
             log(f"纪要整理完成：{len(found.points)} 条")
+            return {"recording_id": recording_id, "points": len(found.points)}
+        finally:
+            with self.lock:
+                self.proofreading.pop(owner, None)
+            self.proofread(owner)
+
+    def run_written(self, owner: str, recording_id: str, log: Log) -> dict[str, Any]:
+        """Cut the written minutes on one recording into points and tie each to the line of its transcript most like
+        it (``minutes.read_written``), retried like the model's own minutes (``run_minutes``)."""
+        library = self.library(owner)
+        key = f"human:{recording_id}"
+        try:
+            recording = library.get(recording_id)
+            written = library.written(recording_id)
+            if recording is None or recording.transcript_id is None or written is None:
+                return {"skipped": True}
+            transcript = library.cleaned(recording)
+            if transcript is None:
+                return {"skipped": True}
+            if self.quota(owner)["exhausted"]:
+                log("录音库本批次的大模型额度已用完，整理纪要暂停")
+                return {"paused": True}
+            assert self.llm is not None
+            llm = self.llm()
+            document, body = written
+            names = library.confirmed_names(recording)
+            lines = [
+                Line(i, names.get(segment.speaker, "其他人"), segment.text)
+                for i, segment in enumerate(transcript.segments)
+            ]
+            log("[1/1] 整理人写纪要")
+            rows: list[CallRow] = []
+            try:
+                with collect_calls() as rows:
+                    found = read_written(
+                        llm,
+                        recording.filename.rsplit(".", 1)[0],
+                        meeting_day(recording.creation_time, recording.filename),
+                        body,
+                        lines,
+                    )
+            except Exception as error:
+                logger.warning("written minutes of %s could not be read", recording_id, exc_info=True)
+                with self.lock:
+                    tries = self.minutes_failed.get(key, (0, 0.0))[0] + 1
+                    self.minutes_failed[key] = (tries, time.time())
+                if tries >= MINUTES_TRIES:
+                    library.write_written(
+                        recording_id,
+                        transcript.id,
+                        document,
+                        Minutes(version=WRITTEN_VERSION, origin="human"),
+                        str(error)[:200] or "整理失败",
+                    )
+                log("整理人写纪要失败，稍后再试")
+                return {"recording_id": recording_id, "failed": True}
+            finally:
+                library.spend("minutes", model_tokens(rows))
+            library.write_written(recording_id, transcript.id, document, found)
+            with self.lock:
+                self.minutes_failed.pop(key, None)
+            log(f"人写纪要整理完成：{len(found.points)} 条")
             return {"recording_id": recording_id, "points": len(found.points)}
         finally:
             with self.lock:
@@ -1688,6 +1758,7 @@ class Libraries:
         recordings = [r for r in library.list() if r.id in access]
         identities = self.team(owner).identities()
         waiting = {r.id for r in library.unproofread()}
+        kinds = library.minutes_kinds()
         with self.lock:
             now = self.proofreading_now.get(owner)
             held_twins = len(self.paused.get(owner, ())) if quota["exhausted"] else 0
@@ -1701,6 +1772,8 @@ class Libraries:
                     "unsettled": max(0, r.speakers - identities.get(r.id, ([], 0))[1]) if r.status == "ready" else 0,
                     **self.proofread_view(library, r, waiting, now),
                     "can_edit": access[r.id].edit,
+                    # Minutes someone wrote (``human``), the model's own (``auto``), or none yet.
+                    "minutes": kinds.get(r.id, ""),
                     # A failed one: whether it can be retried, and whether its file wants uploading again.
                     **(
                         {"retryable": library.retryable(r), "reupload": library.reupload(r)}
@@ -1712,6 +1785,8 @@ class Libraries:
             ],
             "pending": sum(r.status in {"queued", "transcribing"} for r in recordings),
             "max_pending": self.settings.library.max_pending,
+            # Written minutes the viewer brought in that wait to be put on a recording (``web.minutes``).
+            "minutes_pending": len(library.pending_minutes(None if viewer.admin else viewer.key)),
             "asr": isinstance(make_transcriber(self.settings.asr), CommandTranscriber),
             "capacity": self.capacity(),
             # What waits for the quota: recordings to proofread and twins to rebuild.

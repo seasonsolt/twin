@@ -1,0 +1,1 @@
+import{j as a}from"./motion-D9zPmYHC.js";import{p as o}from"./index-BfzfghJV.js";import{A as t}from"./Avatar-DjliiTtU.js";function f({name:e,twin:r,preset:s}){return r?r.avatar_url?a.jsx("img",{src:o(r.avatar_url,r.id),alt:"",className:"size-full object-cover"}):a.jsx(t,{preset:s??r.avatar_preset,blinking:!1}):a.jsx(a.Fragment,{children:Array.from(e)[0]})}export{f as P};

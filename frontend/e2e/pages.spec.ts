@@ -682,6 +682,28 @@ test('import transcript', async ({ page }, info) => {
   expect(missing, 'requests without a mock in e2e/mockApi.ts').toEqual([]);
 });
 
+test('match written minutes', async ({ page }, info) => {
+  const missing: string[] = [];
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.clock.setFixedTime(NOW);
+  await mockApi(page, missing);
+  await page.goto('/#/library');
+  await expect(page.getByText('2026-10-11 客户访谈.txt')).toBeVisible();
+  // Minutes dropped on the library wait for a word before they are put on a recording.
+  await page.getByLabel('选择纪要').setInputFiles({
+    name: '10月会议纪要汇总.docx',
+    mimeType: 'application/octet-stream',
+    buffer: Buffer.from('x'),
+  });
+  const dialog = page.getByRole('dialog', { name: '挂上纪要 · 2 份' });
+  await expect(dialog.getByText('重复 1 份已跳过')).toBeVisible();
+  await page.evaluate(() => document.fonts.ready);
+  await expect(page).toHaveScreenshot(`match-minutes-${info.project.name}.png`);
+  expect(errors, 'page errors').toEqual([]);
+  expect(missing, 'requests without a mock in e2e/mockApi.ts').toEqual([]);
+});
+
 test('fill in what the twin does not know', async ({ page }, info) => {
   const missing: string[] = [];
   const errors: string[] = [];

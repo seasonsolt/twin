@@ -90,6 +90,16 @@ beforeEach(() => {
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/library') return json(state);
       if (url === '/api/library/recollect') return json({ recordings: [] });
+      // Every text file here is a transcript: read as minutes first, each is named back.
+      if (url === '/api/library/minutes/read')
+        return json({
+          transcripts: (init?.body as FormData)
+            .getAll('files')
+            .map((file) => (file as File).name),
+          unreadable: [],
+          skipped: 0,
+          added: 0,
+        });
       if (url === '/api/library/transcripts/preview')
         return refusal?.preview
           ? json({ detail: refusal.detail }, refusal.status)
@@ -208,6 +218,13 @@ it('shows why a file cannot be read and lets it go', async () => {
     vi.fn(async (url: string) => {
       if (url === '/api/library') return json(state);
       if (url === '/api/library/recollect') return json({ recordings: [] });
+      if (url === '/api/library/minutes/read')
+        return json({
+          transcripts: ['说明.txt'],
+          unreadable: [],
+          skipped: 0,
+          added: 0,
+        });
       if (url === '/api/library/transcripts/preview')
         return json(
           { detail: '没有找到按说话人分段的发言，请确认这是会议转写稿' },

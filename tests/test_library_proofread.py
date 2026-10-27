@@ -22,7 +22,7 @@ from twin.media import minutes as mm
 from twin.media.clean import Edits
 from twin.media.cues import Cues
 from twin.media.library import Cleaned, Library
-from twin.media.minutes import Draft, Minutes
+from twin.media.minutes import Draft, Minutes, WrittenDraft
 from twin.media.team import Team
 from twin.persona import chat as pc
 from twin.persona.store import PersonaStore
@@ -195,6 +195,7 @@ class Model(FakeLLM):
         self.namings = 0
         self.minutes: list[str] = []
         self.minutes_fail = False
+        self.written: list[str] = []
         self.rosters: list[list[str]] = []
         self.lock = threading.Lock()
 
@@ -216,6 +217,10 @@ class Model(FakeLLM):
                 return {"points": []}
             n = int(said.split(".")[0])
             return {"points": [{"kind": "决定", "text": "按季度复盘", "lines": [n], "quote": "按季度复盘"}]}
+        if schema is WrittenDraft:
+            with self.lock:
+                self.written.append(user)
+            return {"points": [{"kind": "决定", "text": "那就按季度复盘"}, {"kind": "安排", "text": "王总月底交方案"}]}
         if schema is not Edits:
             return {"items": []}
         with self.lock:
@@ -577,3 +582,87 @@ def test_minutes_the_model_fails_on_are_tried_again_later_then_given_up(
     assert library.unminuted() == ()
     with library.read() as db:
         assert db.execute("SELECT points, error FROM minutes").fetchone()[0] == "[]"
+
+
+def read_minutes(web: TestClient, *files: tuple[str, str]) -> Any:
+    sent = [("files", (name, text.encode(), "text/plain")) for name, text in files]
+    response = web.post("/api/library/minutes/read", files=sent, headers=HEADERS)
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def written_kind(web: TestClient, rec: str) -> str:
+    return str(next(r for r in web.get("/api/library").json()["recordings"] if r["id"] == rec)["minutes"])
+
+
+def test_written_minutes_dropped_on_the_library_wait_to_be_put_on_the_recording_of_their_day(
+    web: TestClient, tmp_path: Path, model: Model
+) -> None:
+    library = library_of(tmp_path)
+    rec = misheard(library)
+    other = meeting(library, "2026-03-09 周会.m4a", lead=[1.0, 0.1, 0])
+    zhang = confirm(web, rec, "S2", new_person="张总")["person_id"]
+    pid = web.post(f"/api/library/people/{zhang}/persona", headers=HEADERS).json()["persona_id"]
+    turns = "\n".join(f"{who}：第{n}句话。" for n, who in enumerate(["张总", "李总"] * 4))
+    read = read_minutes(
+        web,
+        ("2026-03-02 周会纪要.txt", "一、预算按季度复盘。\n二、王总月底交方案。"),
+        ("没有日期的纪要.md", "一、招聘先停。"),
+        ("周会转写.txt", turns),
+    )
+    # A transcript is named back to be brought in as one; nothing is put on a recording yet.
+    assert read["transcripts"] == ["周会转写.txt"] and read["added"] == 2
+    dated, undated = read["pending"]
+    assert (dated["matched"], dated["how"], dated["proposal"]["id"]) == (True, "当天唯一", rec)
+    assert (undated["matched"], undated["how"], undated["proposal"]) == (False, "没有日期", None)
+    assert {c["id"] for c in undated["choices"]} == {rec, other}
+    assert web.get("/api/library").json()["minutes_pending"] == 2
+    # Brought in again: the same minutes, skipped.
+    again = read_minutes(web, ("2026-03-02 周会纪要.txt", "一、预算按季度复盘。\n二、王总月底交方案。"))
+    assert (again["added"], again["skipped"], len(again["pending"])) == (0, 1, 2)
+
+    put = web.post(
+        "/api/library/minutes/attach", json={"items": [{"id": dated["id"], "recording_id": rec}]}, headers=HEADERS
+    )
+    assert put.status_code == 200 and put.json()["attached"] == 1
+    assert [p["id"] for p in put.json()["pending"]] == [undated["id"]]
+    assert written_kind(web, rec) == "human"
+    until(lambda: (r := library.get(rec)) is not None and library.minutes(r, "human") is not None)
+    assert "一、预算按季度复盘" in model.written[0]
+    recording = library.get(rec)
+    assert recording is not None
+    written = library.minutes(recording, "human")
+    assert written is not None and [(p.text, p.lines) for p in written.points] == [
+        ("那就按季度复盘", [3]),
+        ("王总月底交方案", []),
+    ]
+    until(lambda: minuted(web, library, rec) and idle(web, pid))
+
+    with PersonaStore(tmp_path / "personas" / pid / "twin.db") as store:
+        chat = pc.PersonaChat(store, FakeLLM(lambda *a: {}), HashingEmbedder(), Settings(target_name="张总"))
+        ctx = chat.retrieve("3月2号的会定了哪些事？", today=dt.date(2026, 3, 10))
+        assert [m.origin for m in ctx.minutes] == ["human", "auto"]
+        text = pc.material_text(ctx)
+        assert text.index("（人写）") < text.index("（自动整理）")
+
+    dropped = web.delete(f"/api/library/minutes/pending/{undated['id']}", headers=HEADERS)
+    assert dropped.status_code == 200 and dropped.json()["items"] == []
+    assert web.delete(f"/api/library/recordings/{rec}/minutes", headers=HEADERS).status_code == 200
+    assert written_kind(web, rec) == "auto"
+
+
+def test_minutes_added_to_one_recording_take_the_place_of_those_it_had(
+    web: TestClient, tmp_path: Path, model: Model
+) -> None:
+    library = library_of(tmp_path)
+    rec = misheard(library)
+    confirm(web, rec, "S2", new_person="张总")
+    for text in ("一、预算按季度复盘。", "一、预算按季度复盘。\n二、王总月底交方案。"):
+        sent = {"file": ("纪要.txt", text.encode(), "text/plain")}
+        added = web.post(f"/api/library/recordings/{rec}/minutes", files=sent, headers=HEADERS)
+        assert added.status_code == 200, added.text
+    found = library.written(rec)
+    assert found is not None and found[1].endswith("王总月底交方案。") and found[0].filename == "纪要.txt"
+    assert written_kind(web, rec) == "human"
+    missing = web.post("/api/library/recordings/nope/minutes", files={"file": ("纪要.txt", b"x")}, headers=HEADERS)
+    assert missing.status_code == 404

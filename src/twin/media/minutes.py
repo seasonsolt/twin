@@ -1,6 +1,8 @@
 """Meeting minutes (会议纪要): what one meeting settled, read from its whole transcript.
 
-Minutes belong to the meeting, not to a person: every twin made from the recording reads the same ones. They are
+Minutes belong to the meeting, not to a person: every twin made from the recording reads the same ones. A meeting
+may have two: the model's (``auto``), and the minutes someone wrote and brought in (``human``), which come first where
+there are both. The model's are
 read once per version (``MINUTES_VERSION``), one structured call per window of lines like the commitment ledger
 (``persona.ledger``), and a long meeting's windows are merged in one more call. The model names the numbered lines
 each point rests on and quotes one of them; code keeps a point only when the quote is found in those lines, so every
@@ -12,6 +14,7 @@ from __future__ import annotations
 import contextlib
 import datetime as dt
 import json
+import re
 import sqlite3
 from collections.abc import Collection, Sequence
 from contextlib import closing
@@ -26,6 +29,9 @@ from ..usage import default_stage
 from ..util import date_from_name, normalize_for_match
 
 MINUTES_VERSION = "minutes-v1"
+# How written minutes are cut into points and tied to the transcript's lines (``read_written``).
+WRITTEN_VERSION = "written-v1"
+Origin = Literal["auto", "human"]
 # Twin sources made from a library (``media.team``); the rest of the id names the recording and the person's own
 # segments, so a twin's meeting finds its recording's minutes.
 SOURCE_PREFIX = "src_lib_"
@@ -65,6 +71,7 @@ class Minutes:
     # Points the model gave that were dropped: no line named, or the quote not found in the lines named.
     dropped: int = 0
     version: str = MINUTES_VERSION
+    origin: Origin = "auto"
 
 
 class DraftPoint(BaseModel):
@@ -240,28 +247,253 @@ def _merge(
     return points or found
 
 
-def read_minutes(library_db: Path, recording_ids: Collection[str]) -> dict[str, Minutes]:
-    """The model's minutes of each of ``recording_ids`` that has some for its current transcript, read from its
-    library without writing to it (``persona.chat`` reads them for twins). Minutes of an earlier transcript are not
-    that meeting's any more; a library that cannot be read has none."""
+def read_minutes(library_db: Path, recording_ids: Collection[str]) -> dict[str, list[Minutes]]:
+    """The minutes of each of ``recording_ids`` that has some for its current transcript, written ones first, read
+    from its library without writing to it (``persona.chat`` reads them for twins). Minutes read from an earlier
+    transcript, or written ones not cut into points yet, are left out; a library that cannot be read has none."""
     if not recording_ids:
         return {}
     marks = ",".join("?" * len(recording_ids))
     try:
         with closing(sqlite3.connect(f"{library_db.resolve().as_uri()}?mode=ro", uri=True, timeout=10)) as db:
             rows = db.execute(
-                "SELECT m.recording_id, m.version, m.points, m.dropped FROM minutes m JOIN recordings r "
+                "SELECT m.recording_id, m.origin, m.version, m.points, m.dropped FROM minutes m JOIN recordings r "
                 "ON r.id = m.recording_id AND r.transcript_id = m.transcript_id "
-                f"WHERE m.origin = 'auto' AND m.recording_id IN ({marks})",
+                f"WHERE m.version != '' AND m.recording_id IN ({marks}) ORDER BY m.origin DESC",
                 list(recording_ids),
             ).fetchall()
     except sqlite3.Error:
         return {}
-    found = {}
-    for recording_id, version, points, dropped in rows:
+    found: dict[str, list[Minutes]] = {}
+    for recording_id, origin, version, points, dropped in rows:
         try:
             parsed = [MinutesPoint.model_validate(p) for p in json.loads(points)]
         except ValueError:
             continue
-        found[str(recording_id)] = Minutes(parsed, int(dropped), str(version))
+        found.setdefault(str(recording_id), []).append(
+            Minutes(parsed, int(dropped), str(version), "human" if origin == "human" else "auto")
+        )
     return found
+
+
+# ---------------------------------------------------------------- minutes someone wrote
+
+# A file of minutes is read for its day in its name, else in its first lines; a line this short that names a day is
+# a heading, and a file with headings of two days or more holds a meeting under each.
+HEAD_LINES = 12
+HEADING_CHARS = 40
+# Written minutes are cut into points from at most this much of their text.
+WRITTEN_CHARS = 40_000
+# A meeting whose day has several recordings is matched by its time when the minutes say it, within this much.
+CLOCK_SLACK = dt.timedelta(minutes=90)
+# ... else by what it says: the best-matching recording's share of the minutes' character pairs must be this much,
+# and this many times the runner-up's.
+CONTENT_SHARE = 0.2
+CONTENT_LEAD = 1.2
+# A point of written minutes rests on the transcript line (or two in a row) holding this share of its character pairs.
+LINE_SHARE = 0.4
+
+_MONTH_DAY = re.compile(r"(?<!\d)(?P<m>\d{1,2})\s*月\s*(?P<d>\d{1,2})\s*[日号]")
+_CLOCK = re.compile(r"(?<!\d)(?P<h>[01]?\d|2[0-3])\s*[:：点]\s*(?P<min>[0-5]\d)(?!\d)")
+_NAME_CLOCK = re.compile(r"(?<!\d)\d{6}[_-](?P<h>[01]\d|2[0-3])(?P<min>[0-5]\d)(?!\d)")
+_YEAR = re.compile(r"(?<!\d)(?:19|20)\d{2}(?!\d)")
+_PAIR_CHARS = re.compile(r"[\W_]+")
+
+
+@dataclass(frozen=True)
+class WrittenPart:
+    """The minutes of one meeting in a file someone wrote: the whole file, or one of the meetings it holds under
+    headings of their days (``part`` of ``parts``, from 1)."""
+
+    title: str
+    day: dt.date | None
+    clock: dt.time | None
+    text: str
+    part: int = 1
+    parts: int = 1
+
+
+@dataclass(frozen=True)
+class Candidate:
+    """A recording minutes could be of: its day and time when known, and its words (only needed where its day has
+    other recordings)."""
+
+    recording_id: str
+    day: dt.date | None
+    clock: dt.time | None
+    text: str = ""
+    # It has written minutes already: new ones are not put on it without someone saying so.
+    written: bool = False
+
+
+@dataclass(frozen=True)
+class Match:
+    """Which recording minutes are of, and how that was found: ``当天唯一``, ``时刻相近`` or ``内容最像``; or none, and
+    why: ``没有日期``, ``当天没有录音``, ``分不出是哪场`` or ``已有纪要`` (``recording_id`` then names that one)."""
+
+    recording_id: str | None
+    how: str
+
+
+def _day_in(line: str, year: int | None) -> dt.date | None:
+    found = date_from_name(line)
+    if found is not None or year is None:
+        return found
+    if (m := _MONTH_DAY.search(line)) is None:
+        return None
+    with contextlib.suppress(ValueError):
+        return dt.date(year, int(m["m"]), int(m["d"]))
+    return None
+
+
+def _clock_in(text: str, pattern: re.Pattern[str] = _CLOCK) -> dt.time | None:
+    m = pattern.search(text)
+    return dt.time(int(m["h"]), int(m["min"])) if m else None
+
+
+def recording_clock(creation_time: str | None, filename: str) -> dt.time | None:
+    """The time a recording began: in its name (``190708_1834``), else when its file says it was made."""
+    if (found := _clock_in(filename, _NAME_CLOCK)) is not None:
+        return found
+    if creation_time and "T" in creation_time:
+        with contextlib.suppress(ValueError):
+            return dt.datetime.fromisoformat(creation_time).time()
+    return None
+
+
+def written_parts(filename: str, text: str) -> list[WrittenPart]:
+    """The meetings a file of minutes holds, with the day and time of each when it says them: the day in its name,
+    else in its first lines; a file with short headings of two days or more is cut at each, the text before the first
+    going with it."""
+    stem = filename.rsplit(".", 1)[0]
+    lines = text.splitlines()
+    head = "\n".join(lines[:HEAD_LINES])
+    day = date_from_name(stem) or date_from_name(head)
+    # Headings may give the month and day alone ("7月8日周会"), of the year the file is of ("2019年7月纪要汇总").
+    said = _YEAR.search(stem) or _YEAR.search(head)
+    year = day.year if day else int(said[0]) if said else None
+    headings = [
+        (n, found)
+        for n, line in enumerate(lines)
+        if 0 < len(line.strip().lstrip("#").strip()) <= HEADING_CHARS
+        and (found := _day_in(line.strip().lstrip("#"), year)) is not None
+    ]
+    if len({found for _, found in headings}) < 2:
+        clock = _clock_in(stem, _NAME_CLOCK) or _clock_in(head)
+        return [WrittenPart(stem, day, clock, text.strip())]
+    # A day said twice in a row (a heading, then the date line under it) is one meeting.
+    starts = [h for k, h in enumerate(headings) if k == 0 or h[1] != headings[k - 1][1]]
+    parts = []
+    for k, (n, found) in enumerate(starts):
+        end = starts[k + 1][0] if k + 1 < len(starts) else len(lines)
+        body = "\n".join(lines[0 if k == 0 else n : end]).strip()
+        heading = lines[n].strip().lstrip("#").strip()
+        parts.append(WrittenPart(heading, found, _clock_in("\n".join(lines[n : n + 3])), body, k + 1, len(starts)))
+    return parts
+
+
+def _pairs(text: str) -> set[str]:
+    plain = _PAIR_CHARS.sub("", normalize_for_match(text))
+    return {plain[i : i + 2] for i in range(len(plain) - 1)}
+
+
+def _share(needle: set[str], hay: set[str]) -> float:
+    return len(needle & hay) / len(needle) if needle else 0.0
+
+
+def match_recording(part: WrittenPart, candidates: Sequence[Candidate]) -> Match:
+    """The recording the minutes are of, by their day, then their time, then what they say; none where that does not
+    settle it, for someone to choose."""
+    if part.day is None:
+        return Match(None, "没有日期")
+    same = [c for c in candidates if c.day == part.day]
+    if not same:
+        return Match(None, "当天没有录音")
+    found: Match | None = None
+    if len(same) == 1:
+        found = Match(same[0].recording_id, "当天唯一")
+    if found is None and part.clock is not None:
+        at = dt.datetime.combine(part.day, part.clock)
+        timed = sorted(
+            (abs(dt.datetime.combine(part.day, c.clock) - at), c.recording_id) for c in same if c.clock is not None
+        )
+        if timed and timed[0][0] <= CLOCK_SLACK:
+            found = Match(timed[0][1], "时刻相近")
+    if found is None:
+        words = _pairs(part.text)
+        scored = sorted(((_share(words, _pairs(c.text)), c.recording_id) for c in same), reverse=True)
+        best, second = scored[0][0], scored[1][0] if len(scored) > 1 else 0.0
+        if best >= CONTENT_SHARE and best >= CONTENT_LEAD * second:
+            found = Match(scored[0][1], "内容最像")
+    if found is None:
+        return Match(None, "分不出是哪场")
+    if any(c.written for c in same if c.recording_id == found.recording_id):
+        return Match(found.recording_id, "已有纪要")
+    return found
+
+
+class WrittenPoint(BaseModel):
+    kind: PointKind
+    text: str = Field(description="纪要里的一条，意思不变；可以去掉编号和客套话")
+    owner: str = Field(default="", description="负责的人；纪要里没写留空")
+    due: str = Field(default="", description="期限，YYYY-MM-DD；纪要里没写留空")
+
+
+class WrittenDraft(BaseModel):
+    points: list[WrittenPoint] = Field(default_factory=list)
+
+
+WRITTEN = """下面是一份人写的会议纪要。把它拆成一条一条定下来的事：
+
+- 决定：拍板的事。安排：谁去做什么、什么时候做完。要求：以后都要照做的规则或标准。待定：留到以后再定的事。
+- 每条一句话，意思和纪要一致，不增不减；纪要里的背景介绍、参会人名单、汇报数字不列。
+- 负责人和期限只写纪要里写了的；期限按会议日期换算成具体日期，没写就留空。
+- 按纪要里的先后排。"""
+
+
+def read_written(
+    llm: LLM,
+    title: str,
+    day: dt.date | None,
+    text: str,
+    lines: Sequence[Line],
+    effort: Effort = "medium",
+    reasoning_effort: str | None = None,
+) -> Minutes:
+    """Written minutes cut into points by the model, as they are, each tied to the transcript line (or two in a row)
+    most like it; a point like no line keeps none, and cannot be cited."""
+    when = f"{day.isoformat()}（周{'一二三四五六日'[day.weekday()]}）" if day else "未知"
+    with default_stage("minutes"):
+        draft = llm.structured(
+            system=WRITTEN,
+            user=f"会议：{title}\n会议日期：{when}\n\n纪要：\n{text[:WRITTEN_CHARS]}",
+            schema=WrittenDraft,
+            effort=effort,
+            reasoning_effort=reasoning_effort,
+        )
+    said = [line for line in lines if line.text.strip()]
+    pairs = [_pairs(line.text) for line in said]
+    points = []
+    for item in draft.points:
+        if not item.text.strip():
+            continue
+        words = _pairs(item.text)
+        # One line like it, else two in a row: a point is often said across a line and the next.
+        best, at = 0.0, None
+        for width in (1, 2):
+            for n in range(len(said) - width + 1):
+                share = _share(words, set().union(*pairs[n : n + width]))
+                if share > best + 1e-9:
+                    best, at = share, [said[k].idx for k in range(n, n + width)]
+            if best >= LINE_SHARE:
+                break
+        points.append(
+            MinutesPoint(
+                kind=item.kind,
+                text=item.text.strip(),
+                owner=item.owner.strip(),
+                due=_due(item.due, day),
+                lines=at if at is not None and best >= LINE_SHARE else [],
+            )
+        )
+    return Minutes(points, 0, WRITTEN_VERSION, "human")

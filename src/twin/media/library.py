@@ -49,7 +49,7 @@ from .ingest import (
     extract_flac,
     stopped,
 )
-from .minutes import MINUTES_VERSION, Minutes, read_minutes
+from .minutes import MINUTES_VERSION, WRITTEN_VERSION, Match, Minutes, Origin, WrittenPart, read_minutes
 
 logger = logging.getLogger(__name__)
 
@@ -231,8 +231,11 @@ CREATE TABLE IF NOT EXISTS recollections (
     PRIMARY KEY (recording_id, new_transcript)
 );
 -- A meeting's minutes (``media.minutes``): ``auto``, read by the model from the transcript ``transcript_id`` under
--- the rules ``version``, once per transcript and version whatever came of it. ``points`` is a JSON list of
--- ``minutes.MinutesPoint``, in the order the meeting said them; empty with ``error`` set when the model could not.
+-- the rules ``version``, once per transcript and version whatever came of it; ``human``, written by someone and
+-- brought in (``document``: the file's name, sha256 and which of its meetings, ``body``: its text, ``how``: how it was
+-- matched to the recording), cut into points against ``transcript_id`` under ``version`` ('' until then). ``points``
+-- is a JSON list of ``minutes.MinutesPoint``, in the order the meeting said them; empty with ``error`` set when the
+-- model could not.
 CREATE TABLE IF NOT EXISTS minutes (
     recording_id TEXT NOT NULL,
     origin TEXT NOT NULL,
@@ -242,7 +245,26 @@ CREATE TABLE IF NOT EXISTS minutes (
     dropped INTEGER NOT NULL DEFAULT 0,
     error TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
+    document TEXT,
+    body TEXT,
+    how TEXT,
     PRIMARY KEY (recording_id, origin)
+);
+-- Written minutes brought in and not yet put on a recording (``media.minutes.written_parts``): the recording they
+-- seem to be of (``proposal``) and how that was found, or why none was (``how``), for whoever brought them in to say.
+CREATE TABLE IF NOT EXISTS minutes_pending (
+    id TEXT PRIMARY KEY,
+    uploader TEXT,
+    filename TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    part INTEGER NOT NULL,
+    parts INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    day TEXT,
+    body TEXT NOT NULL,
+    proposal TEXT,
+    how TEXT NOT NULL,
+    created_at TEXT NOT NULL
 );
 -- What the library last heard from the collector, e.g. ``asr``: the service the latest transcription came from.
 CREATE TABLE IF NOT EXISTS collector (
@@ -257,6 +279,34 @@ CREATE TABLE IF NOT EXISTS spending (
     tokens INTEGER NOT NULL
 );
 """
+
+
+class WrittenDocument(BaseModel):
+    """The file written minutes came in: its name and sha256, and which of the meetings it holds."""
+
+    filename: str
+    sha256: str
+    part: int = 1
+    parts: int = 1
+
+
+class PendingMinutes(BaseModel):
+    id: str
+    uploader: str | None
+    filename: str
+    sha256: str
+    part: int
+    parts: int
+    title: str
+    day: str | None
+    body: str
+    proposal: str | None
+    how: str
+    created_at: str
+
+    @property
+    def document(self) -> WrittenDocument:
+        return WrittenDocument(filename=self.filename, sha256=self.sha256, part=self.part, parts=self.parts)
 
 
 class Recording(BaseModel):
@@ -447,6 +497,9 @@ class Library:
                 ("voiceprints", "source", "TEXT"),
                 ("voiceprints", "corrected", "INTEGER NOT NULL DEFAULT 0"),
                 ("personas_sync", "answerable", "INTEGER"),
+                ("minutes", "document", "TEXT"),
+                ("minutes", "body", "TEXT"),
+                ("minutes", "how", "TEXT"),
             ):
                 columns = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
                 if columns and column not in columns:
@@ -906,10 +959,137 @@ class Library:
             ).fetchall()
         return {str(r[0]): str(r[1]) for r in rows}
 
-    def minutes(self, recording: Recording) -> Minutes | None:
-        """The model's minutes of the recording's current transcript, under whichever rules read them; None when
-        there are none yet."""
-        return read_minutes(self.db_path, [recording.id]).get(recording.id)
+    def minutes(self, recording: Recording, origin: Origin = "auto") -> Minutes | None:
+        """The recording's minutes of ``origin`` read from its current transcript, under whichever rules read them;
+        None when there are none yet."""
+        found = read_minutes(self.db_path, [recording.id]).get(recording.id, [])
+        return next((m for m in found if m.origin == origin), None)
+
+    def minutes_kinds(self) -> dict[str, str]:
+        """By recording, the minutes it has: ``human`` when someone's are on it (read or not yet), else ``auto`` when
+        the model's of its current transcript have points."""
+        with self._db() as db:
+            rows = db.execute(
+                "SELECT m.recording_id, m.origin FROM minutes m JOIN recordings r ON r.id = m.recording_id "
+                "WHERE m.origin = 'human' OR (m.transcript_id = r.transcript_id AND m.points != '[]')"
+            ).fetchall()
+        found: dict[str, str] = {}
+        for recording_id, origin in rows:
+            if found.get(recording_id) != "human":
+                found[recording_id] = origin
+        return found
+
+    def put_written(self, recording_id: str, document: WrittenDocument, body: str, how: str) -> None:
+        """Put written minutes on the recording, in place of any it had; they are cut into points later
+        (``unread_written``)."""
+        with self._db() as db:
+            db.execute(
+                "INSERT INTO minutes (recording_id, origin, transcript_id, version, points, created_at, document, "
+                "body, how) VALUES (?, 'human', '', '', '[]', ?, ?, ?, ?) ON CONFLICT (recording_id, origin) DO UPDATE "
+                "SET transcript_id = '', version = '', points = '[]', dropped = 0, error = '', "
+                "created_at = excluded.created_at, document = excluded.document, body = excluded.body, "
+                "how = excluded.how",
+                (recording_id, _now(), document.model_dump_json(), body, how),
+            )
+
+    def written(self, recording_id: str) -> tuple[WrittenDocument, str] | None:
+        """The written minutes on the recording: their file, and their text."""
+        with self._db() as db:
+            row = db.execute(
+                "SELECT document, body FROM minutes WHERE recording_id = ? AND origin = 'human'", (recording_id,)
+            ).fetchone()
+        return (WrittenDocument.model_validate_json(row[0]), str(row[1])) if row else None
+
+    def remove_written(self, recording_id: str) -> bool:
+        with self._db() as db:
+            return bool(
+                db.execute("DELETE FROM minutes WHERE recording_id = ? AND origin = 'human'", (recording_id,)).rowcount
+            )
+
+    def unread_written(self) -> tuple[Recording, ...]:
+        """Transcribed recordings whose written minutes are not cut into points against their current transcript under
+        the current rules, latest first."""
+        with self._db() as db:
+            rows = db.execute(
+                "SELECT r.* FROM recordings r JOIN minutes m ON m.recording_id = r.id AND m.origin = 'human' "
+                "WHERE r.status = 'ready' AND r.transcript_id IS NOT NULL "
+                "AND (m.transcript_id IS NOT r.transcript_id OR m.version != ?) "
+                "ORDER BY COALESCE(r.creation_time, r.created_at) DESC, r.id",
+                (WRITTEN_VERSION,),
+            ).fetchall()
+        return tuple(Recording.model_validate(dict(row)) for row in rows)
+
+    def write_written(
+        self, recording_id: str, transcript_id: str, document: WrittenDocument, minutes: Minutes, error: str = ""
+    ) -> bool:
+        """File the points the written minutes ``document`` were cut into; False when other minutes were put on the
+        recording meanwhile."""
+        with self._db() as db:
+            return bool(
+                db.execute(
+                    "UPDATE minutes SET transcript_id = ?, version = ?, points = ?, dropped = ?, error = ? "
+                    "WHERE recording_id = ? AND origin = 'human' AND document = ?",
+                    (
+                        transcript_id,
+                        minutes.version,
+                        json.dumps([p.model_dump(mode="json") for p in minutes.points], ensure_ascii=False),
+                        minutes.dropped,
+                        error,
+                        recording_id,
+                        document.model_dump_json(),
+                    ),
+                ).rowcount
+            )
+
+    def written_documents(self) -> set[tuple[str, int]]:
+        """(sha256, part) of every written minutes brought in, put on a recording or waiting: brought in again,
+        they are the same."""
+        with self._db() as db:
+            found = {(str(r[0]), int(r[1])) for r in db.execute("SELECT sha256, part FROM minutes_pending").fetchall()}
+            for (document,) in db.execute("SELECT document FROM minutes WHERE origin = 'human'").fetchall():
+                with contextlib.suppress(ValueError):
+                    parsed = WrittenDocument.model_validate_json(document)
+                    found.add((parsed.sha256, parsed.part))
+        return found
+
+    def add_pending(self, uploader: str | None, document: WrittenDocument, part: WrittenPart, match: Match) -> str:
+        pending_id = uuid.uuid4().hex[:12]
+        with self._db() as db:
+            db.execute(
+                "INSERT INTO minutes_pending (id, uploader, filename, sha256, part, parts, title, day, body, proposal, "
+                "how, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    pending_id,
+                    uploader,
+                    document.filename,
+                    document.sha256,
+                    document.part,
+                    document.parts,
+                    part.title,
+                    part.day.isoformat() if part.day else None,
+                    part.text,
+                    match.recording_id,
+                    match.how,
+                    _now(),
+                ),
+            )
+        return pending_id
+
+    def pending_minutes(self, uploader: str | None = None) -> tuple[PendingMinutes, ...]:
+        """Written minutes waiting to be put on a recording, of whoever brought them in (everyone's with None), in the
+        order they came."""
+        with self._db() as db:
+            rows = db.execute(
+                "SELECT * FROM minutes_pending WHERE ? IS NULL OR uploader IS ? ORDER BY created_at, filename, part",
+                (uploader, uploader),
+            ).fetchall()
+        return tuple(PendingMinutes.model_validate(dict(row)) for row in rows)
+
+    def drop_pending(self, pending_id: str) -> PendingMinutes | None:
+        with self._db() as db:
+            row = db.execute("SELECT * FROM minutes_pending WHERE id = ?", (pending_id,)).fetchone()
+            db.execute("DELETE FROM minutes_pending WHERE id = ?", (pending_id,))
+        return PendingMinutes.model_validate(dict(row)) if row else None
 
     def spend(self, kind: str, tokens: int) -> None:
         if tokens > 0:

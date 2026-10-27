@@ -1954,6 +1954,56 @@ const handlers: Record<string, Handler> = {
     decided: 2,
     unsettled: 2,
   }),
+  // Written minutes dropped on the library: one file of two meetings, one matched by its day, the other to choose.
+  'POST /api/library/minutes/read': reply({
+    transcripts: [],
+    unreadable: [],
+    skipped: 1,
+    added: 2,
+  }),
+  'GET /api/library/minutes/pending': reply({
+    items: [
+      {
+        id: 'pm-1',
+        filename: '10月会议纪要汇总.docx',
+        title: '10月15日 产品周会',
+        part: 1,
+        parts: 2,
+        day: '2026-10-15',
+        how: '当天唯一',
+        matched: true,
+        proposal: {
+          id: 'r-weekly',
+          filename: '2026-10-15 产品周会.m4a',
+          day: '2026-10-15',
+        },
+        choices: [],
+      },
+      {
+        id: 'pm-2',
+        filename: '10月会议纪要汇总.docx',
+        title: '评审会',
+        part: 2,
+        parts: 2,
+        day: null,
+        how: '没有日期',
+        matched: false,
+        proposal: null,
+        choices: [
+          {
+            id: 'r-retro',
+            filename: '2026-10-16 迭代复盘.m4a',
+            day: '2026-10-16',
+          },
+          {
+            id: 'r-review',
+            filename: '2026-10-12 需求评审.mp4',
+            day: '2026-10-12',
+          },
+        ],
+      },
+    ],
+  }),
   'GET /api/library/people': reply({ items: people, matches: [] }),
   // A sample of 许清禾's sounds like 林舟: the team page offers the administrator to hear the two side by side.
   'GET /api/library/voice-clashes': reply([

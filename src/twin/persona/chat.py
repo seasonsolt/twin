@@ -328,6 +328,8 @@ class MeetingMinutes:
     title: str
     day: dt.date | None
     points: tuple[tuple[MinutesPoint, str | None], ...]
+    # Written by someone (``human``), or read by the model from the whole transcript (``auto``).
+    origin: str = "auto"
 
 
 @dataclass
@@ -969,18 +971,19 @@ class PersonaChat:
         shown: list[MeetingMinutes] = []
         budget = MAX_MINUTES_POINTS
         for day, sid in held:
-            minutes = found.get(recordings.get(sid, ""))
-            if minutes is None or not minutes.points or len(minutes.points) > budget:
-                continue
-            budget -= len(minutes.points)
-            points = []
-            for point in minutes.points:
-                line = next((n for n in point.lines if (sid, n) in material.lines), None)
-                masked = point.model_copy(
-                    update={"text": material.mask(point.text), "owner": material.mask(point.owner)}
-                )
-                points.append((masked, None if line is None else f"{sid}#{line:05d}"))
-            shown.append(MeetingMinutes(material.meetings[sid], day, tuple(points)))
+            # A meeting's written minutes, then the model's to fill in what they leave out; shown latest meeting last.
+            for minutes in reversed(found.get(recordings.get(sid, ""), [])):
+                if not minutes.points or len(minutes.points) > budget:
+                    continue
+                budget -= len(minutes.points)
+                points = []
+                for point in minutes.points:
+                    line = next((n for n in point.lines if (sid, n) in material.lines), None)
+                    masked = point.model_copy(
+                        update={"text": material.mask(point.text), "owner": material.mask(point.owner)}
+                    )
+                    points.append((masked, None if line is None else f"{sid}#{line:05d}"))
+                shown.append(MeetingMinutes(material.meetings[sid], day, tuple(points), minutes.origin))
         return shown[::-1]
 
     def _items(self, as_of: dt.date | None, view: ExpressionView, hidden: PrivateWords) -> dict[str, PersonaItem]:
@@ -1767,9 +1770,13 @@ def _material_lines(ctx: PersonaContext) -> list[str]:
     narrated = [e for e, _ in ctx.expressions if e.narrated and e.expression_id not in shown]
     others = [e for e, _ in ctx.others if e.expression_id not in shown]
     if ctx.minutes:
-        lines.append("会议纪要（模型按整场转写自动整理，按会上说到的先后；方括号里是出处，可引用）：")
+        lines.append(
+            "会议纪要（人写的以它为准；自动整理的是模型按整场转写整理的，补人写纪要没有的事；按会上说到的先后；"
+            "方括号里是出处，可引用）："
+        )
         for m in ctx.minutes:
-            lines.append(f"- 会议 {f'{m.day.isoformat()} ' if m.day else ''}{m.title}：")
+            by = "人写" if m.origin == "human" else "自动整理"
+            lines.append(f"- 会议 {f'{m.day.isoformat()} ' if m.day else ''}{m.title}（{by}）：")
             lines.extend(_render_point(point, ref) for point, ref in m.points)
     if ctx.passages:
         lines.append("会议片段（按会上说话的顺序；“我”是本人，其他人说的话是别人说的，不是我的观点或经历）：")

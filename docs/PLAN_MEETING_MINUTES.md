@@ -154,7 +154,7 @@
 2. ✓ 聊天接入：问题点名会议时（`meeting_window`），按分身来源编号找到录音（`minutes.recording_of`），每次提问时从录音库读纪要，放在会议片段前面；别人的名字按分身的化名规则替换；最多 120 条，从最近的会取起。
 3. ✓ 人写纪要（`web/minutes.py`）：
    - 单场：录音“⋯”里“添加纪要 / 换一份纪要 / 移除纪要”（`POST`、`DELETE /api/library/recordings/{id}/minutes`），有人写纪要的录音行加“纪要”标记。
-   - 批量：录音库菜单“上传纪要”或直接拖进来，读完弹“挂上纪要”卡片（`GET /api/library/minutes/pending`、`POST /api/library/minutes/attach`），没选的留在“N 份纪要待配对 · 去选”。
+   - 批量：录音库标题下面的上传区（录音、转写稿、纪要共用这一个入口）或直接拖进来，读完弹“挂上纪要”卡片（`GET /api/library/minutes/pending`、`POST /api/library/minutes/attach`），没选的留在“N 份纪要待配对 · 去选”。
    - 聊天：同一场会人写的在前、自动整理的在后，各自标明。
 4. ✓ 自动整理已发布到 stable（1767469a），daw 在后台从近到远补整理。人写纪要上传待发布。
 

@@ -117,7 +117,7 @@ it('reads dropped minutes for their meetings and puts them on once someone says 
   const user = userEvent.setup({ applyAccept: false });
   show();
   await screen.findByText(weekly.filename);
-  await user.upload(screen.getByLabelText('选择录音文件'), [
+  await user.upload(screen.getByLabelText('选择文件'), [
     new File(['x'], '2019年7月纪要汇总.docx'),
     new File(['x'], '评审纪要.md'),
   ]);

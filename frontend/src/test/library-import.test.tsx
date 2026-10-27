@@ -141,7 +141,7 @@ it('reads a transcript first, then brings it in with the speakers the importer c
   show();
   expect(await screen.findByText('还没有录音')).toBeInTheDocument();
   await user.upload(
-    screen.getByLabelText('选择录音文件'),
+    screen.getByLabelText('选择文件'),
     new File(['x'], '运营周会.docx'),
   );
   const dialog = await screen.findByRole('dialog', { name: '导入转写稿' });
@@ -202,7 +202,7 @@ it('leaves speakers undecided when nobody is chosen, and says so when the file i
   show();
   await screen.findByText('还没有录音');
   await user.upload(
-    screen.getByLabelText('选择录音文件'),
+    screen.getByLabelText('选择文件'),
     new File(['x'], '运营周会.txt'),
   );
   const dialog = await screen.findByRole('dialog', { name: '导入转写稿' });
@@ -237,7 +237,7 @@ it('shows why a file cannot be read and lets it go', async () => {
   show();
   await screen.findByText('还没有录音');
   await user.upload(
-    screen.getByLabelText('选择录音文件'),
+    screen.getByLabelText('选择文件'),
     new File(['x'], '说明.txt'),
   );
   const dialog = await screen.findByRole('dialog', { name: '导入转写稿' });
@@ -256,7 +256,7 @@ it('lets the importer say a speaker the name matched is someone else', async () 
   show();
   await screen.findByText('还没有录音');
   await user.upload(
-    screen.getByLabelText('选择录音文件'),
+    screen.getByLabelText('选择文件'),
     new File(['x'], '客户会.docx'),
   );
   const dialog = await screen.findByRole('dialog', { name: '导入转写稿' });
@@ -287,7 +287,7 @@ it.each([
     show();
     await screen.findByText('还没有录音');
     await user.upload(
-      screen.getByLabelText('选择录音文件'),
+      screen.getByLabelText('选择文件'),
       new File(['x'], '运营周会.docx'),
     );
     const dialog = await screen.findByRole('dialog', { name: '导入转写稿' });
@@ -319,7 +319,7 @@ it('says at once, when the file is read, that the server will not take it', asyn
   show();
   await screen.findByText('还没有录音');
   await user.upload(
-    screen.getByLabelText('选择录音文件'),
+    screen.getByLabelText('选择文件'),
     new File(['x'], '运营周会.docx'),
   );
   const dialog = await screen.findByRole('dialog', { name: '导入转写稿' });
@@ -333,7 +333,7 @@ it('brings in several transcripts one after another, from the page menu too', as
   const user = userEvent.setup({ applyAccept: false });
   show();
   await screen.findByText('还没有录音');
-  await user.upload(screen.getByLabelText('选择录音文件'), [
+  await user.upload(screen.getByLabelText('选择文件'), [
     new File(['x'], '一.docx'),
     new File(['x'], '二.txt'),
   ]);
@@ -353,12 +353,8 @@ it('brings in several transcripts one after another, from the page menu too', as
   await waitFor(() =>
     expect(screen.queryByRole('dialog', { name: '导入转写稿' })).toBeNull(),
   );
-  // “⋯ → 导入转写稿” opens the file chooser for transcripts.
-  const choose = vi.spyOn(screen.getByLabelText('选择转写稿'), 'click');
-  await user.click(screen.getByLabelText('更多'));
-  await user.click(screen.getByRole('button', { name: '导入转写稿' }));
-  expect(choose).toHaveBeenCalledOnce();
-  await user.upload(screen.getByLabelText('选择转写稿'), [
+  // Subtitles chosen with 上传 are transcripts too.
+  await user.upload(screen.getByLabelText('选择文件'), [
     new File(['x'], '三.srt'),
     new File(['x'], '四.vtt'),
   ]);

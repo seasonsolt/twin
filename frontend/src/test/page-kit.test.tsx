@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   Checkbox,
   FileDrop,
+  FileDropSurface,
   ListRow,
   Page,
   Section,
@@ -79,6 +80,34 @@ describe('page kit', () => {
     });
     expect(onFiles).toHaveBeenCalledTimes(2);
     expect(screen.getByRole('button', { name: '选择文件' })).toBeDisabled();
+  });
+
+  it('opens the chooser from the whole band, and keeps files dropped on it from the page around it', async () => {
+    const onFiles = vi.fn();
+    const onPage = vi.fn();
+    const file = new File(['a'], 'a.m4a', { type: 'audio/mp4' });
+    render(
+      <FileDropSurface onFiles={onPage}>
+        <FileDrop
+          size="band"
+          label="上传"
+          title="上传录音、转写稿或纪要"
+          hint="拖到这里，或点一下选文件"
+          inputLabel="选择文件"
+          onFiles={onFiles}
+        />
+      </FileDropSurface>,
+    );
+    const click = vi.spyOn(screen.getByLabelText('选择文件'), 'click');
+    await userEvent.click(
+      screen.getByRole('button', { name: /上传录音、转写稿或纪要/u }),
+    );
+    expect(click).toHaveBeenCalledOnce();
+    fireEvent.drop(screen.getByRole('region', { name: '上传' }), {
+      dataTransfer: { files: [file] },
+    });
+    expect(onFiles).toHaveBeenCalledExactlyOnceWith([file]);
+    expect(onPage).not.toHaveBeenCalled();
   });
 
   it('labels a checkbox by its text and a select by aria-label', async () => {

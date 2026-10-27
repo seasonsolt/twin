@@ -97,7 +97,7 @@ it('uploads several recordings to the account library one after another', async 
   expect(screen.queryByText(/排队 0/u)).toBeNull();
   await userEvent
     .setup({ applyAccept: false })
-    .upload(screen.getByLabelText('选择录音文件'), [
+    .upload(screen.getByLabelText('选择文件'), [
       new File(['abc'], '一.m4a'),
       new File(['def'], '二.wav'),
       new File(['x'], '头像.png'),
@@ -146,9 +146,9 @@ it('takes more recordings while one is uploading, after it and only once', async
   expect(await screen.findByText('还没有录音')).toBeInTheDocument();
   const user = userEvent.setup({ applyAccept: false });
   const first = new File(['abc'], '一.m4a', { lastModified: 1 });
-  await user.upload(screen.getByLabelText('选择录音文件'), [first]);
+  await user.upload(screen.getByLabelText('选择文件'), [first]);
   await waitFor(() => expect(order).toEqual(['一.m4a']));
-  await user.upload(screen.getByLabelText('选择录音文件'), [
+  await user.upload(screen.getByLabelText('选择文件'), [
     new File(['abc'], '一.m4a', { lastModified: 1 }),
     new File(['def'], '二.wav', { lastModified: 2 }),
   ]);
@@ -485,10 +485,12 @@ it('takes files from the picker and dropped on the page, with the upload button 
   show();
   await screen.findByText('还没有录音');
   // Any file can be picked (some Windows machines grey .m4a out of a filtered picker); the page skips what is not media.
-  expect(screen.getByLabelText('选择录音文件')).not.toHaveAttribute('accept');
-  // Uploading is this page's: its button opens the picker, on a wide screen as on a phone.
-  const click = vi.spyOn(screen.getByLabelText('选择录音文件'), 'click');
-  await userEvent.click(screen.getByRole('button', { name: '上传录音' }));
+  expect(screen.getByLabelText('选择文件')).not.toHaveAttribute('accept');
+  // Uploading is this page's: its band opens the picker, on a wide screen as on a phone.
+  const click = vi.spyOn(screen.getByLabelText('选择文件'), 'click');
+  await userEvent.click(
+    screen.getByRole('button', { name: /上传录音、转写稿或纪要/u }),
+  );
   expect(click).toHaveBeenCalledOnce();
   fireEvent.drop(screen.getByRole('region', { name: '拖放上传录音' }), {
     dataTransfer: {
@@ -536,9 +538,7 @@ it('shows a colleague’s meeting one was in without its controls, and says when
   expect(within(row).queryByRole('link', { name: '确认说话人' })).toBeNull();
   await userEvent
     .setup({ applyAccept: false })
-    .upload(screen.getByLabelText('选择录音文件'), [
-      new File(['abc'], '周会.m4a'),
-    ]);
+    .upload(screen.getByLabelText('选择文件'), [new File(['abc'], '周会.m4a')]);
   expect(
     await screen.findByText('「周会.m4a」已经有同事上传过，由 TA 整理'),
   ).toBeInTheDocument();
@@ -549,6 +549,7 @@ it('offers recordings a newer transcription would collect again, and goes back t
   state.recordings = [
     recording({ id: 'a', filename: '周会.m4a' }),
     recording({ id: 'b', filename: '月会.m4a', previous: 't-old' }),
+    recording({ id: 'c', filename: '季会.m4a' }),
   ];
   let recollect = {
     service: '1.4.1/overlap',
@@ -591,12 +592,10 @@ it('offers recordings a newer transcription would collect again, and goes back t
     }),
   );
   show();
-  // No banner: one recording at a time from its own menu, or all that are offered from the page's.
+  // No banner: one recording at a time from its own menu, or all that are offered from their own view.
   expect(screen.queryByText(/可以用新版转写重新采集/u)).toBeNull();
-  await user.click(await screen.findByLabelText('更多'));
-  await user.click(
-    screen.getByRole('button', { name: '用新版转写重新采集（2）' }),
-  );
+  await user.click(await screen.findByRole('button', { name: '可重新采集 2' }));
+  await user.click(screen.getByRole('button', { name: '重新采集 2 份' }));
   const dialog = await screen.findByRole('dialog', {
     name: '用新版转写重新采集',
   });
@@ -613,7 +612,7 @@ it('offers recordings a newer transcription would collect again, and goes back t
   // Asked for, the recording is in 处理中 and says so.
   await user.click(await screen.findByRole('button', { name: '处理中 1' }));
   expect(await screen.findByText('重新采集中')).toBeVisible();
-  await user.click(screen.getByRole('button', { name: '全部 2' }));
+  await user.click(screen.getByRole('button', { name: '全部 3' }));
 
   await user.click(await screen.findByLabelText('更多：月会.m4a'));
   await user.click(
@@ -643,8 +642,10 @@ it('keeps the upload button on a phone', async () => {
   );
   show();
   await screen.findByText('还没有录音');
-  const click = vi.spyOn(screen.getByLabelText('选择录音文件'), 'click');
-  await userEvent.click(screen.getByRole('button', { name: '上传录音' }));
+  const click = vi.spyOn(screen.getByLabelText('选择文件'), 'click');
+  await userEvent.click(
+    screen.getByRole('button', { name: /上传录音、转写稿或纪要/u }),
+  );
   expect(click).toHaveBeenCalledOnce();
 });
 

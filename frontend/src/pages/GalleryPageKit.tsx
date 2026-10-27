@@ -1073,6 +1073,15 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
           hint="音频或视频都可以，一次可以选多个。"
           onFiles={(files) => toast(`选了 ${files.length} 个文件`)}
         />
+        <FileDrop
+          size="band"
+          label="上传示例"
+          title="上传录音、转写稿或纪要"
+          inputLabel="选择示例文件"
+          disabled={disabled}
+          hint="拖到这里，或点一下选文件"
+          onFiles={(files) => toast(`选了 ${files.length} 个文件`)}
+        />
       </Card>
     </Stack>
   );

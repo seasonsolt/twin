@@ -48,7 +48,8 @@ export function FileInput({
 
 /**
  * A dashed area to drop files on, with a button that opens the file chooser; clicking anywhere in the area opens it
- * too. `label` names the region.
+ * too. `label` names the region. `band` is one low strip that is itself the button: the standing way in on a page
+ * that already has content.
  */
 export function FileDrop({
   label,
@@ -77,12 +78,13 @@ export function FileDrop({
   inputLabel?: string;
   /** Small print under the button: formats, limits, who can see the files. */
   hint?: ReactNode;
-  /** lg: the main call to action of an empty page. */
-  size?: 'md' | 'lg';
+  /** lg: the main call to action of an empty page; band: a strip above a page's content. */
+  size?: 'md' | 'lg' | 'band';
   children?: ReactNode;
 }) {
   const input = useRef<HTMLInputElement>(null);
   const [over, setOver] = useState(false);
+  const band = size === 'band';
   return (
     <section
       aria-label={label}
@@ -112,23 +114,50 @@ export function FileDrop({
       }}
       className={cn(
         'flex flex-col items-center rounded-lg border-2 border-dashed bg-surface text-center transition-colors',
-        size === 'lg' ? 'gap-4 px-6 py-12' : 'gap-3 p-6',
+        band ? '' : size === 'lg' ? 'gap-4 px-6 py-12' : 'gap-3 p-6',
         over ? 'border-accent bg-soft' : 'border-border',
         disabled
           ? 'cursor-not-allowed opacity-60'
           : 'cursor-pointer hover:bg-soft',
       )}
     >
-      <Upload
-        aria-hidden
-        className={cn('text-secondary', size === 'lg' ? 'size-10' : 'size-8')}
-      />
-      <p className={cn('font-medium', size === 'lg' && 'text-lg')}>
-        {over ? '松开即可上传' : title}
-      </p>
-      <Button disabled={disabled} onClick={() => input.current?.click()}>
-        {actionLabel}
-      </Button>
+      {band ? (
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => input.current?.click()}
+          className="flex w-full items-center justify-center gap-4 rounded-lg px-6 py-5 text-left focus-visible:outline-2 focus-visible:outline-accent disabled:cursor-not-allowed"
+        >
+          <span className="grid size-12 shrink-0 place-items-center rounded-full bg-accent text-on-accent">
+            <Upload aria-hidden className="size-6" />
+          </span>
+          <span className="flex flex-col gap-1">
+            <span className="text-lg font-medium">
+              {over ? '松开即可上传' : title}
+            </span>
+            {hint && <span className="text-sm text-secondary">{hint}</span>}
+          </span>
+        </button>
+      ) : (
+        <>
+          <Upload
+            aria-hidden
+            className={cn(
+              'text-secondary',
+              size === 'lg' ? 'size-10' : 'size-8',
+            )}
+          />
+          <p className={cn('font-medium', size === 'lg' && 'text-lg')}>
+            {over ? '松开即可上传' : title}
+          </p>
+          <Button disabled={disabled} onClick={() => input.current?.click()}>
+            {actionLabel}
+          </Button>
+          {hint && (
+            <div className="space-y-1 text-sm text-secondary">{hint}</div>
+          )}
+        </>
+      )}
       <FileInput
         ref={input}
         label={inputLabel ?? actionLabel}
@@ -138,13 +167,12 @@ export function FileDrop({
         directory={directory}
         disabled={disabled}
       />
-      {hint && <div className="space-y-1 text-sm text-secondary">{hint}</div>}
       {children}
     </section>
   );
 }
 
-/** A page-wide drop target; ordinary clicks keep their normal meaning. */
+/** A page-wide drop target; ordinary clicks keep their normal meaning. Files a drop area inside it took stay there. */
 export function FileDropSurface({
   fillPage = true,
   children,
@@ -173,8 +201,9 @@ export function FileDropSurface({
           setOver(false);
       }}
       onDrop={(event) => {
-        event.preventDefault();
         setOver(false);
+        if (event.defaultPrevented) return;
+        event.preventDefault();
         if (!disabled) onFiles(Array.from(event.dataTransfer.files));
       }}
     >

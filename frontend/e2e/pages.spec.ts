@@ -667,7 +667,7 @@ test('import transcript', async ({ page }, info) => {
   await page.goto('/#/library');
   await expect(page.getByText('2026-10-11 客户访谈.txt')).toBeVisible();
   // 第 19 屏: the file is read first, and shown with who each speaker would be.
-  await page.getByLabel('选择转写稿').setInputFiles({
+  await page.getByLabel('选择文件').setInputFiles({
     name: '运营周会-10月18日.docx',
     mimeType: 'application/octet-stream',
     buffer: Buffer.from('x'),
@@ -691,7 +691,7 @@ test('match written minutes', async ({ page }, info) => {
   await page.goto('/#/library');
   await expect(page.getByText('2026-10-11 客户访谈.txt')).toBeVisible();
   // Minutes dropped on the library wait for a word before they are put on a recording.
-  await page.getByLabel('选择纪要').setInputFiles({
+  await page.getByLabel('选择文件').setInputFiles({
     name: '10月会议纪要汇总.docx',
     mimeType: 'application/octet-stream',
     buffer: Buffer.from('x'),

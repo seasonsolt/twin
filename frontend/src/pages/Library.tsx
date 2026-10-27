@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Upload } from 'lucide-react';
 import {
   ActionMenu,
   AvatarStack,
@@ -9,6 +8,7 @@ import {
   Checkbox,
   Dialog,
   EmptyState,
+  FileDrop,
   FileDropSurface,
   FileInput,
   Input,
@@ -174,13 +174,10 @@ export function Library() {
   // A failed refresh shows even over a list already on screen, as the page's own poll always did.
   const error = problem || loadError;
   const confirm = useConfirm();
-  const input = useRef<HTMLInputElement>(null);
-  const transcriptInput = useRef<HTMLInputElement>(null);
   // 重新上传: the failed recording the file chosen next takes the place of.
   const reuploadInput = useRef<HTMLInputElement>(null);
   const [replacing, setReplacing] = useState<Recording | null>(null);
   // Written minutes: many read for the recordings of their days, or one put on the recording chosen.
-  const minutesInput = useRef<HTMLInputElement>(null);
   const writtenInput = useRef<HTMLInputElement>(null);
   const [writtenFor, setWrittenFor] = useState<Recording | null>(null);
   const [matching, setMatching] = useState(false);
@@ -405,6 +402,9 @@ export function Library() {
   const [search, setSearch] = useState('');
   const recordings = library?.recordings ?? [];
   const recollectingIds = new Set(recollecting.map((r) => r.id));
+  const offeredIds = new Set(offered.map((r) => r.id));
+  // The view of those to transcribe anew goes once none are left.
+  const shown = filter === 'recollect' && !offered.length ? 'all' : filter;
   const matches: Record<string, (recording: Recording) => boolean> = {
     all: () => true,
     waiting: (r) =>
@@ -415,6 +415,8 @@ export function Library() {
       r.proofread === 'waiting' ||
       recollectingIds.has(r.id),
     failed: (r) => r.status === 'failed',
+    // Transcribed by an older service, and not yet asked to be again.
+    recollect: (r) => offeredIds.has(r.id),
   };
   // By title or by who was in it.
   const wanted = search.trim().toLocaleLowerCase();
@@ -425,77 +427,32 @@ export function Library() {
     );
   // What is still being processed comes first, the rest as the server lists them (the sort is stable).
   const filtered = recordings
-    .filter((r) => matches[filter](r) && found(r))
+    .filter((r) => matches[shown](r) && found(r))
     .sort(
       (a, b) => Number(matches.processing(b)) - Number(matches.processing(a)),
     );
   return (
     <FileDropSurface onFiles={take}>
-      <Page
-        stackHeaderOnMobile
-        title="录音库"
-        titleSize="display"
-        actions={
-          <>
-            <ActionMenu
-              label="更多"
-              items={[
-                {
-                  label: '上传纪要',
-                  onSelect: () => minutesInput.current?.click(),
-                },
-                {
-                  label: '导入转写稿',
-                  onSelect: () => transcriptInput.current?.click(),
-                },
-                ...(offered.length > 0
-                  ? [
-                      {
-                        label: `用新版转写重新采集（${offered.length}）`,
-                        onSelect: () => {
-                          setPicked(new Set(offered.map((r) => r.id)));
-                          setPicking(true);
-                        },
-                      },
-                    ]
-                  : []),
-              ]}
-            />
-            {/* Uploading lives here, with the recordings; dropping a file anywhere still adds it. */}
-            <Button onClick={() => input.current?.click()}>
-              <Upload aria-hidden className="size-5" />
-              上传录音
-            </Button>
-          </>
-        }
-      >
-        <FileInput ref={input} label="选择录音文件" multiple onFiles={take} />
+      <Page stackHeaderOnMobile title="录音库" titleSize="display">
+        {/* The page's one way in, for recordings, transcripts and minutes alike, told apart as when dropped anywhere. */}
+        <FileDrop
+          size="band"
+          label="上传"
+          title="上传录音、转写稿或纪要"
+          hint="拖到这里，或点一下选文件"
+          inputLabel="选择文件"
+          onFiles={take}
+        />
         <FileInput
           ref={reuploadInput}
           label="选择重新上传的录音"
           onFiles={(files) => replacing && void reupload(replacing, files)}
         />
         <FileInput
-          ref={minutesInput}
-          label="选择纪要"
-          accept={TRANSCRIPT_ACCEPT}
-          multiple
-          onFiles={(files) => void readMinutes(files)}
-        />
-        <FileInput
           ref={writtenInput}
           label="选择这场会的纪要"
           accept={TRANSCRIPT_ACCEPT}
           onFiles={(files) => writtenFor && void addWritten(writtenFor, files)}
-        />
-        <FileInput
-          ref={transcriptInput}
-          label="选择转写稿"
-          accept={TRANSCRIPT_ACCEPT}
-          multiple
-          onFiles={(files) =>
-            setTranscripts((current) => [...current, ...files])
-          }
         />
         {error && (
           <Text role="alert" tone="danger">
@@ -542,13 +499,14 @@ export function Library() {
           <Tabs
             variant="filters"
             label="录音分类"
-            value={filter}
+            value={shown}
             onValueChange={setFilter}
             items={[
               ['all', '全部'],
               ['waiting', '待确认'],
               ['processing', '处理中'],
               ['failed', '失败'],
+              ...(offered.length ? [['recollect', '可重新采集']] : []),
             ].map(([value, label]) => ({
               value,
               label: `${label} ${recordings.filter(matches[value]).length}`,
@@ -563,6 +521,19 @@ export function Library() {
             onChange={(event) => setSearch(event.target.value)}
           />
         </Toolbar>
+        {shown === 'recollect' && (
+          <Row justify="end">
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setPicked(new Set(offered.map((r) => r.id)));
+                setPicking(true);
+              }}
+            >
+              重新采集 {offered.length} 份
+            </Button>
+          </Row>
+        )}
         <UploadList picks={unfinished} uploading={uploading} onStop={stop} />
         {!library ? (
           <Skeleton className="h-32" />

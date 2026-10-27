@@ -1954,13 +1954,22 @@ const handlers: Record<string, Handler> = {
     decided: 2,
     unsettled: 2,
   }),
-  // Written minutes dropped on the library: one file of two meetings, one matched by its day, the other to choose.
-  'POST /api/library/minutes/read': reply({
-    transcripts: [],
-    unreadable: [],
-    skipped: 1,
-    added: 2,
-  }),
+  // Read for what each file is: one with 纪要 in its name is minutes, the rest are transcripts, named back.
+  'POST /api/library/minutes/read': (_url, route) => {
+    const names = [
+      ...(route.request().postDataBuffer()?.toString('utf8') ?? '').matchAll(
+        /filename="([^"]+)"/gu,
+      ),
+    ].map((found) => found[1]);
+    const minutes = names.filter((name) => name.includes('纪要'));
+    return {
+      transcripts: names.filter((name) => !name.includes('纪要')),
+      unreadable: [],
+      skipped: minutes.length ? 1 : 0,
+      added: minutes.length ? 2 : 0,
+    };
+  },
+  // One file of two meetings' minutes: one matched by its day, the other to choose.
   'GET /api/library/minutes/pending': reply({
     items: [
       {

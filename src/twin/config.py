@@ -470,6 +470,11 @@ class OpsSettings(BaseModel):
     # indexes. Too small, and one of a big twin's indexes is built again for every question (about a minute). The
     # latest one is kept whatever its size.
     keyword_index_mb: int = Field(default=1024, ge=0)
+    # What chat keeps of each twin's memory between questions, about this many MB for all twins together: a twin of
+    # three hundred and fifty thousand expressions takes some 2 GB, most of it vectors. A twin whose memory is not kept
+    # is read again for every question (some 20 seconds for that one). 0 keeps none; otherwise the latest is kept
+    # whatever its size.
+    chat_memory_mb: int = Field(default=4096, ge=0)
 
 
 class UpgradeSettings(BaseModel):

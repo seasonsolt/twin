@@ -16,6 +16,8 @@ import hashlib
 import json
 import math
 import re
+import threading
+from collections import OrderedDict
 from collections.abc import AsyncGenerator, Callable, Hashable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import aclosing
@@ -480,6 +482,62 @@ class _Material:
             others=self.others.keywords_only(),
         )
 
+    def nbytes(self) -> int:
+        """Roughly what the material takes: its vectors, and about 1.3 KB for each candidate read."""
+        corpora = (self.items, self.expressions, self.others)
+        return sum(c.vectors[1].nbytes + 1300 * len(c.candidates) for c in corpora)
+
+
+# What the materials ``PersonaChat`` keeps between questions may take together, roughly; ``[ops] chat_memory_mb`` sets
+# it for the web. A twin of three hundred and fifty thousand expressions takes some 2 GB, most of it vectors.
+KEPT_MATERIAL_BYTES = 4096 * 2**20
+
+
+@dataclass
+class _KeptMaterial:
+    # The store's ``memory_revision`` the material was read at; None until the first read finishes.
+    revision: int | None
+    material: _Material | None
+    lock: threading.Lock
+
+
+_kept_material: OrderedDict[Hashable, _KeptMaterial] = OrderedDict()
+_kept_material_lock = threading.Lock()
+
+
+def keep_material_up_to(megabytes: int) -> None:
+    """Let the materials kept between questions take about ``megabytes`` together; the latest one is kept whatever its
+    size, and 0 keeps none."""
+    global KEPT_MATERIAL_BYTES
+    KEPT_MATERIAL_BYTES = megabytes * 2**20
+
+
+def _keep(key: Hashable | None, revision: Callable[[], int], read: Callable[[], _Material]) -> _Material:
+    """``read()``, kept between calls for ``key`` while ``revision()`` stays the same; the least recently used are
+    dropped beyond ``KEPT_MATERIAL_BYTES``. A None key, or a budget of 0, reads every time."""
+    if key is None or not KEPT_MATERIAL_BYTES:
+        return read()
+    at = revision()
+    with _kept_material_lock:
+        kept = _kept_material.get(key)
+        if kept is None:
+            kept = _kept_material[key] = _KeptMaterial(None, None, threading.Lock())
+        _kept_material.move_to_end(key)
+    # One read at a time for a key: a second question about the same twin waits for it instead of reading it too.
+    with kept.lock:
+        if kept.material is not None and kept.revision == at:
+            return kept.material
+        # Let the old material go before the new one is read, so a large twin is not held twice.
+        kept.material = None
+        material = read()
+        kept.material, kept.revision = material, at
+    with _kept_material_lock:
+        while len(_kept_material) > 1 and (
+            sum(k.material.nbytes() for k in _kept_material.values() if k.material is not None) > KEPT_MATERIAL_BYTES
+        ):
+            _kept_material.popitem(last=False)
+    return material
+
 
 def _family(store: PersonaStore, namespace: str, *view: object) -> Hashable:
     """Which kept keyword index a namespace's candidates update: one per twin, namespace and view (the audience, the
@@ -612,7 +670,28 @@ class PersonaChat:
             return None
 
     def _material(self, as_of: dt.date | None) -> _Material:
-        """What a retrieval ranks and every prompt carries, read before the question is known."""
+        """What a retrieval ranks and every prompt carries, read before the question is known: kept between questions
+        while the twin's memory is unchanged, since reading a large memory again takes longer than the rest of an
+        answer."""
+        path = str(self.store.path)
+        key = (
+            None
+            if path in ("", ":memory:")
+            else (
+                str(self.store.path.resolve()),
+                self.audience,
+                as_of,
+                self.meeting_record,
+                embedder_fingerprint(self.embedder),
+                # What the privacy view is read with (``ExpressionView``).
+                self.settings.pseudonymize_others,
+                self.settings.target_name,
+                tuple(self.settings.target_aliases),
+            )
+        )
+        return _keep(key, self.store.memory_revision, partial(self._read_material, as_of))
+
+    def _read_material(self, as_of: dt.date | None) -> _Material:
         # One read of the corpus serves the evidence quotes, the person's own words and other people's.
         view = ExpressionView(self.store, self.settings)
         hidden = self._private_expressions()

@@ -60,7 +60,9 @@ twin doctor --probe        # 才会调用启用的 LLM、向量、TTS、ASR，�
 web_port = 8765
 allow_hosts = ["twin.example.com"]
 # 聊天在两问之间保留的关键词索引，所有分身合计约多少 MB；十万条原话约占 70 MB。
-keyword_index_mb = 192
+keyword_index_mb = 1024
+# 聊天在两问之间保留的已读记忆（含向量），所有分身合计约多少 MB；三十五万条原话约占 2 GB，0 表示不保留。
+chat_memory_mb = 4096
 # 必须先自行配置 Cloudflare Tunnel 与凭据；命令只写路径和参数，不放 token。
 # tunnel_command = ["/opt/homebrew/bin/cloudflared", "tunnel", "run", "your-tunnel-name"]
 

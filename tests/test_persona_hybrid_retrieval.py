@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import math
+import sqlite3
 import threading
 from collections.abc import Callable
+from pathlib import Path
 from time import process_time
 
 import numpy as np
@@ -16,9 +18,10 @@ from twin.persona import chat as pc
 from twin.persona import lexical
 from twin.persona.items import PersonaItem
 from twin.persona.lexical import BM25, cached, tokenize
-from twin.persona.schema import ChatTurn
+from twin.persona.schema import ChatTurn, Expression, Source
 from twin.persona.sources import parse_chat, pseudonym
 from twin.persona.store import PersonaStore
+from twin.persona.tiers import COLLEAGUE, SELF, Audience
 
 
 class ConstantEmbedder:
@@ -293,3 +296,75 @@ def test_the_material_is_read_and_the_question_embedded_while_the_question_is_re
         # still be running then.
         assert sorted(embedded) == [["QX-7 怎么样？"], ["项目（project）", "甲", "乙"]]
         assert [item.item_id for item, _ in ctx.items] == ["pi_000"]
+
+
+def test_the_material_is_kept_between_questions_until_the_memory_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = Settings(target_name="张三")
+    embedder = ConstantEmbedder()
+    path = tmp_path / "twin.db"
+    reads: list[int] = []
+    read_corpus = PersonaStore.read_corpus
+
+    def counted(store: PersonaStore) -> tuple[list[Source], list[Expression]]:
+        reads.append(1)
+        return read_corpus(store)
+
+    monkeypatch.setattr(PersonaStore, "read_corpus", counted)
+
+    def ask(question: str, audience: Audience = SELF) -> list[str]:
+        # Each question opens its own store connection, as the web does.
+        with PersonaStore(path) as store:
+            chat = pc.PersonaChat(store, FakeLLM(lambda *a: {}), embedder, settings, audience=audience)
+            return [item.item_id for item, _ in chat.retrieve(question).items]
+
+    item = PersonaItem(item_id="pi_000", facet_id="2.1", statement="负责QX-7项目", evidence=[])
+    with PersonaStore(path) as store:
+        store.replace_facet_items("2.1", [item])
+        pc.index_persona(store, embedder, settings)
+    reads.clear()
+    assert ask("QX-7") == ["pi_000"]
+    assert ask("QX-7") == ["pi_000"] and len(reads) == 1
+    # Another tier's view is read for itself.
+    ask("QX-7", COLLEAGUE)
+    assert len(reads) == 2
+    # Writing what chat retrieves from, from any connection, has the next question read the memory again.
+    with sqlite3.connect(path) as db:
+        db.execute("UPDATE p_items SET json = replace(json, 'QX-7', 'QX-8')")
+    assert ask("QX-8") == ["pi_000"] and len(reads) == 3
+    # A conversation, or a build's cache of merged batches, is not what chat retrieves from.
+    with PersonaStore(path) as store:
+        store.create_conversation(None)
+        store.set_meta("merge_batch:2.1:x", "{}")
+    ask("QX-8")
+    assert len(reads) == 3
+    monkeypatch.setattr(pc, "KEPT_MATERIAL_BYTES", 0)
+    ask("QX-8")
+    ask("QX-8")
+    assert len(reads) == 5
+
+
+def test_kept_materials_beyond_the_budget_are_dropped_least_recently_used_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = Settings(target_name="张三")
+    monkeypatch.setattr(pc, "_kept_material", pc.OrderedDict())
+    paths = [tmp_path / f"{name}.db" for name in ("a", "b")]
+    for path in paths:
+        with PersonaStore(path) as store:
+            store.replace_facet_items(
+                "2.1", [PersonaItem(item_id="pi_000", facet_id="2.1", statement="负责QX-7项目", evidence=[])]
+            )
+            pc.index_persona(store, ConstantEmbedder(), settings)
+
+    def read(path: Path) -> pc._Material:
+        with PersonaStore(path) as store:
+            return pc.PersonaChat(store, FakeLLM(lambda *a: {}), ConstantEmbedder(), settings)._material(None)
+
+    material = read(paths[0])
+    assert len(pc._kept_material) == 1
+    # Room for one: the twin read last stays, whatever its size, and the one asked longest ago goes.
+    monkeypatch.setattr(pc, "KEPT_MATERIAL_BYTES", material.nbytes())
+    read(paths[1])
+    assert [key[0] for key in pc._kept_material] == [str(paths[1].resolve())]

@@ -70,6 +70,20 @@ CREATE TABLE IF NOT EXISTS p_ledger (
     review TEXT NOT NULL, json TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS p_ledger_source ON p_ledger(source_id);
 """
+# The tables chat retrieves from, and the ``p_meta`` keys it does not: a build's cache of merged batches.
+_RETRIEVED = ("p_sources", "p_expressions", "p_items", "p_reviews", "p_item_tiers", "p_vectors", "p_meta")
+_UNRETRIEVED_META = "merge_batch:%"
+_REVISION = (
+    "CREATE TABLE IF NOT EXISTS p_revision (id INTEGER PRIMARY KEY CHECK (id = 1), n INTEGER NOT NULL);"
+    " INSERT OR IGNORE INTO p_revision VALUES (1, 0);"
+    + "".join(
+        f" CREATE TRIGGER IF NOT EXISTS {table}_{event.lower()}_revision AFTER {event} ON {table}"
+        + (f" WHEN {row}.key NOT LIKE '{_UNRETRIEVED_META}'" if table == "p_meta" else "")
+        + " BEGIN UPDATE p_revision SET n = n + 1; END;"
+        for table in _RETRIEVED
+        for event, row in (("INSERT", "NEW"), ("UPDATE", "NEW"), ("DELETE", "OLD"))
+    )
+)
 _MIGRATIONS: tuple[str, ...] = (
     _SCHEMA,
     # 2: per-chunk extraction counts (``ExtractStats`` JSON); NULL for chunks extracted before it.
@@ -85,6 +99,8 @@ _MIGRATIONS: tuple[str, ...] = (
     "ALTER TABLE conversation_turns ADD COLUMN handoff_id TEXT;"
     " CREATE UNIQUE INDEX IF NOT EXISTS conversation_turns_handoff"
     " ON conversation_turns(conversation_id, handoff_id) WHERE handoff_id IS NOT NULL;",
+    # 7: a count of the writes to what chat retrieves from (``memory_revision``), from any connection.
+    _REVISION,
 )
 
 
@@ -1110,6 +1126,12 @@ class PersonaStore:
                 (f"{NOTE_TIER_PREFIX}%", f"embedder:{ITEMS_NAMESPACE}", "built_at"),
             ).fetchone()
         return hashlib.sha256("|".join(str(c) for c in rows).encode()).hexdigest()[:16]
+
+    def memory_revision(self) -> int:
+        """How many writes the tables chat retrieves from have taken, from any connection: the same number again means
+        what a retrieval reads is unchanged."""
+        with self._lock:
+            return int(self._db.execute("SELECT n FROM p_revision").fetchone()[0])
 
     def get_meta(self, key: str) -> str | None:
         with self._lock:

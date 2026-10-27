@@ -121,6 +121,19 @@ K_MEETING_EXPRESSIONS = 24
 K_MEETING_OTHERS = 12
 # A meeting named by its day or order is ranked within first, its others' lines as well.
 K_NAMED_OTHERS = 24
+# A question about everything one named meeting settled ("那次会上定了哪些事") is not like any few lines of it: it is
+# shown in passages spread over the whole meeting, each around the owner's most directive line in its stretch.
+_WHOLE_MEETING = re.compile(
+    r"哪些事|什么事|定了什么|定了啥|聊了什么|说了什么|讲了什么|谈了什么|开了什么|主要内容|内容是什么|都定了|都说了|"
+    r"哪些安排|决定了什么"
+)
+_DIRECTIVE = re.compile(
+    r"要求|必须|一定要|负责|牵头|安排|落实|跟进|定了|定下来|就这样|就这么|确定|决定|下周|明天|后天|月底|"
+    r"周[一二三四五六日天]|\d+号|\d+月|你们|大家|拿出|方案|提交|报给|发给我|先.{0,8}再|由.{0,6}来|不要|不能|原则上|统一|"
+    r"标准|目标"
+)
+WHOLE_MEETING_MIN_CHARS = 8
+WHOLE_MEETING_LINE_CHARS = 120
 # A recorder names its files by the time recorded (``190708_1834``): the day of a meeting stored without one.
 _RECORDED = re.compile(r"(?<!\d)(\d{2})(\d{2})(\d{2})[_-]\d{4}(?!\d)")
 MEETING_KINDS = frozenset({SourceKind.AUDIO, SourceKind.VIDEO})
@@ -331,6 +344,8 @@ class PersonaContext:
     others: list[tuple[Expression, float]] = field(default_factory=list)
     # The dates a relative time in the question ("last Saturday") can mean (see ``time_window``).
     window: tuple[dt.date, dt.date] | None = None
+    # The days of the meetings the question names ("上上次", "7月8号的会"; see ``meeting_window``).
+    named: tuple[dt.date, dt.date] | None = None
     # Commitment ledger entries the question is about, with their current status; only in the person's own chat.
     ledger: list[tuple[LedgerEntry, LedgerStatus]] = field(default_factory=list)
     # A twin made from a recording library answers as a meeting record (see ``gate``): no profile items, only what
@@ -620,6 +635,31 @@ def _passages(material: _Material, found: Sequence[Expression]) -> list[Passage]
     return passages
 
 
+def _whole_meeting(material: _Material, day: dt.date) -> list[Passage]:
+    """Passages spread over the meetings of ``day``: each meeting cut into equal stretches, ``MAX_PASSAGES`` in all,
+    and each stretch shown around the owner's line with the most directive words (要求, 负责, 下周, ...), in the order
+    they were said."""
+    by_meeting: dict[str, list[Expression]] = {}
+    for (source_id, _), e in material.lines.items():
+        if e.date == day and source_id in material.meetings:
+            by_meeting.setdefault(source_id, []).append(e)
+    if not by_meeting:
+        return []
+
+    def directive(e: Expression) -> tuple[int, int]:
+        return len(_DIRECTIVE.findall(e.text)), min(len(e.text), WHOLE_MEETING_LINE_CHARS)
+
+    stretches = max(1, MAX_PASSAGES // len(by_meeting))
+    picked = []
+    for lines in by_meeting.values():
+        lines.sort(key=lambda e: e.idx)
+        for n in range(stretches):
+            stretch = lines[n * len(lines) // stretches : (n + 1) * len(lines) // stretches]
+            if mine := [e for e in stretch if e.is_target and len(e.text) >= WHOLE_MEETING_MIN_CHARS]:
+                picked.append(max(mine, key=directive))
+    return _passages(material, picked)
+
+
 def _passage_lines(passage: Passage) -> list[tuple[Expression, str]]:
     """The passage's lines as shown, up to ``PASSAGE_CHARS`` together."""
     shown: list[tuple[Expression, str]] = []
@@ -878,6 +918,11 @@ class PersonaChat:
         found = [e for e, _ in [*ranked_expr, *ranked_others]]
         if named is not None:
             found = [e for e in found if inside(e)] + [e for e in found if not inside(e)]
+        passages = []
+        if named is not None and named[0] == named[1] and _WHOLE_MEETING.search(query):
+            passages = _whole_meeting(material, named[0])
+        if not passages:
+            passages = _passages(material, found)
         return PersonaContext(
             ranked_items,
             ranked_expr,
@@ -888,11 +933,12 @@ class PersonaChat:
             extreme_rate=material.extreme_rate,
             others=ranked_others,
             window=window,
+            named=named,
             ledger=entries,
             meeting_record=self.meeting_record,
             audience=self.audience,
             assistant=self.assistant,
-            passages=_passages(material, found),
+            passages=passages,
         )
 
     def _items(self, as_of: dt.date | None, view: ExpressionView, hidden: PrivateWords) -> dict[str, PersonaItem]:
@@ -1680,6 +1726,11 @@ def _material_lines(ctx: PersonaContext) -> list[str]:
     others = [e for e, _ in ctx.others if e.expression_id not in shown]
     if ctx.passages:
         lines.append("会议片段（按会上说话的顺序；“我”是本人，其他人说的话是别人说的，不是我的观点或经历）：")
+        if ctx.named is not None:
+            lo, hi = ctx.named
+            span = lo.isoformat() if lo == hi else f"{lo.isoformat()} 到 {hi.isoformat()}"
+            # "上上次" or "最近几次" alone does not say which of the dated passages it means.
+            lines.append(f"（问题问的就是 {span} 的会，标着这个日期的片段都出自那里。）")
         for p in ctx.passages:
             date = p.lines[0].date if p.lines else None
             lines.append(f"- [{p.ref}] 会议 {f'{date.isoformat()} ' if date else ''}{p.title}：")

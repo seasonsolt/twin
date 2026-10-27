@@ -459,3 +459,56 @@ def test_a_meeting_recorded_without_its_day_is_dated_by_its_file_and_found_by_th
         )
         # The latest meeting is the one asked about as the last.
         assert chat.retrieve("最近一次会说了什么", today=dt.date(2026, 10, 27)).passages[0].title == "190801_1830"
+
+
+def test_what_a_named_meeting_settled_is_shown_from_all_over_it() -> None:
+    settings = Settings(target_name="张三")
+    source = Source(
+        source_id="src_long",
+        kind=SourceKind.AUDIO,
+        title="190708_1834",
+        origin="录音库：190708_1834.mp3",
+        imported_at="2026-10-27T00:00:00+00:00",
+        n_expressions=0,
+        n_target=0,
+        text_state="raw",
+        media_status="ready",
+    )
+    lines = [("张三" if i % 2 else "李四", f"第{i}句闲聊不相干的话", i % 2 == 1) for i in range(320)]
+    # One directive line of the owner's in each stretch of twenty; the question shares no word with any of them.
+    decided = list(range(9, 320, 20))
+    for i in decided:
+        lines[i] = ("张三", f"老王下周一前负责把第{i}号方案提交给我", True)
+    with PersonaStore(":memory:") as store:
+        store.put_source(parse_media(source, lines))
+        chat = pc.PersonaChat(store, FakeLLM(lambda *a: {}), ConstantEmbedder(), settings)
+        ctx = chat.retrieve("2019年7月8号那次会上定了哪些事？", today=dt.date(2026, 10, 27))
+        assert [p.ref for p in ctx.passages] == [f"src_long#{i:05d}" for i in decided]
+        assert ctx.named == (dt.date(2019, 7, 8), dt.date(2019, 7, 8))
+        assert "（问题问的就是 2019-07-08 的会" in pc.material_text(ctx)
+
+
+def test_the_meeting_before_last_is_named_to_the_answer() -> None:
+    settings = Settings(target_name="张三")
+
+    def recording(title: str) -> ParsedSource:
+        source = Source(
+            source_id=f"src_{title}",
+            kind=SourceKind.AUDIO,
+            title=title,
+            origin=f"录音库：{title}.mp3",
+            imported_at="2026-10-27T00:00:00+00:00",
+            n_expressions=0,
+            n_target=0,
+            text_state="raw",
+            media_status="ready",
+        )
+        return parse_media(source, [("张三", f"大家下周把方案报给我{i}", True) for i in range(10)])
+
+    with PersonaStore(":memory:") as store:
+        for title in ("260504_1830", "260511_1830", "260518_1830"):
+            store.put_source(recording(title))
+        chat = pc.PersonaChat(store, FakeLLM(lambda *a: {}), ConstantEmbedder(), settings)
+        ctx = chat.retrieve("上上次开会定了哪些事？", today=dt.date(2026, 10, 27))
+        assert {p.title for p in ctx.passages} == {"260511_1830"}
+        assert "（问题问的就是 2026-05-11 的会" in pc.material_text(ctx)

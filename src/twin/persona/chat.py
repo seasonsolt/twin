@@ -34,7 +34,7 @@ from ..config import Settings
 from ..embed import Embedder, EmbedError, Matrix, embedder_fingerprint
 from ..llm import LLM, LLMError, hedged_stream
 from ..usage import default_stage
-from ..util import Progress
+from ..util import Progress, date_from_name
 from . import gate
 from .assistant import ASSISTANT_MEETING_SECTION, ASSISTANT_STREAM_FORMAT, ASSISTANT_SYSTEM
 from .attachments import AttachmentPassage
@@ -58,6 +58,7 @@ from .schema import (
     LedgerStatus,
     OwnerPart,
     ReviewStatus,
+    Source,
     SourceKind,
 )
 from .sources import ExpressionView
@@ -65,7 +66,7 @@ from .store import PersonaStore
 from .style import extreme_rate
 from .tiers import COLLEAGUE, Audience, PrivateWords, for_audience, private_words
 from .tiers import SELF as SELF_AUDIENCE
-from .when import time_window
+from .when import meeting_window, time_window
 
 # Whom a conversation's answer can hand what only the person can settle to: ``owner``, the person it is made for
 # (the answer says it goes to them, and says in its metadata what), ``unclaimed``, a twin nobody has taken (there is no
@@ -113,7 +114,15 @@ PASSAGE_BEFORE = 6
 PASSAGE_AFTER = 4
 PASSAGE_LINE_CHARS = 300
 PASSAGE_CHARS = 2400
-MAX_PASSAGES = 10
+MAX_PASSAGES = 16
+# A twin with meetings ranks more lines: one word (a project, a person) comes up in dozens of meetings, and the lines
+# are short, each shown in its passage.
+K_MEETING_EXPRESSIONS = 24
+K_MEETING_OTHERS = 12
+# A meeting named by its day or order is ranked within first, its others' lines as well.
+K_NAMED_OTHERS = 24
+# A recorder names its files by the time recorded (``190708_1834``): the day of a meeting stored without one.
+_RECORDED = re.compile(r"(?<!\d)(\d{2})(\d{2})(\d{2})[_-]\d{4}(?!\d)")
 MEETING_KINDS = frozenset({SourceKind.AUDIO, SourceKind.VIDEO})
 # Per offered alternative, added on top of the shared ranking so one alternative's evidence is never crowded out.
 K_ALTERNATIVE_ITEMS = 1
@@ -497,6 +506,8 @@ class _Material:
     # Every line of the meetings in the view, by source and number, and each meeting's title (``_passages``).
     lines: dict[tuple[str, int], Expression] = field(default_factory=dict)
     meetings: dict[str, str] = field(default_factory=dict)
+    # The days there were meetings, in order (``meeting_window``).
+    days: list[dt.date] = field(default_factory=list)
 
     def keywords_only(self) -> _Material:
         return replace(
@@ -561,6 +572,20 @@ def _keep(key: Hashable | None, revision: Callable[[], int], read: Callable[[], 
         ):
             _kept_material.popitem(last=False)
     return material
+
+
+def meeting_day(source: Source) -> dt.date | None:
+    """The day of a meeting: its own, else the one its file is named with."""
+    if source.first_date is not None:
+        return source.first_date
+    if (named := date_from_name(source.title)) is not None:
+        return named
+    if (recorded := _RECORDED.search(source.title)) is None:
+        return None
+    try:
+        return dt.date(2000 + int(recorded.group(1)), int(recorded.group(2)), int(recorded.group(3)))
+    except ValueError:
+        return None
 
 
 def _passages(material: _Material, found: Sequence[Expression]) -> list[Passage]:
@@ -764,6 +789,14 @@ class PersonaChat:
     def _read_material(self, as_of: dt.date | None) -> _Material:
         # One read of the corpus serves the evidence quotes, the person's own words and other people's.
         view = ExpressionView(self.store, self.settings)
+        meetings = {s.source_id: s.title for s in view.sources.values() if s.kind in MEETING_KINDS}
+        days = {sid: day for sid in meetings if (day := meeting_day(view.sources[sid])) is not None}
+        # A meeting stored without its day (a recording with no date in it) is dated by its file's name, for the
+        # answer to say when and for questions that name the meeting by its day.
+        view.corpus = [
+            e.model_copy(update={"date": days[e.source_id]}) if e.date is None and e.source_id in days else e
+            for e in view.corpus
+        ]
         hidden = self._private_expressions()
         items = self._items(as_of, view, hidden)
         expressions = {
@@ -777,7 +810,6 @@ class PersonaChat:
         fingerprint = embedder_fingerprint(self.embedder)
         core, voice = self._portrait(list(items.values()), list(expressions.values()))
         surveys = {s.source_id for s in self.store.list_sources(SourceKind.QUESTIONNAIRE)}
-        meetings = {s.source_id: s.title for s in view.sources.values() if s.kind in MEETING_KINDS}
         view_of = (self.audience, as_of)
 
         def corpus[T](namespace: str, candidates: dict[str, T], text: Callable[[T], str]) -> _Corpus[T]:
@@ -795,6 +827,7 @@ class PersonaChat:
             extreme_rate(e.text for e in expressions.values() if e.source_id in surveys and not e.narrated),
             {(e.source_id, e.idx): e for e in [*expressions.values(), *others.values()] if e.source_id in meetings},
             meetings,
+            sorted({day for day in days.values() if as_of is None or day <= as_of}),
         )
 
     def _ranked(
@@ -817,19 +850,34 @@ class PersonaChat:
         item_corpus, expr_corpus = material.items, material.expressions
         ranked_items = item_corpus.rank(queries, K_ITEMS)
         k_expressions = K_EXPRESSIONS_SPAN if needs_derivation(query) else K_EXPRESSIONS
+        if material.meetings:
+            k_expressions = max(k_expressions, K_MEETING_EXPRESSIONS)
         ranked_expr = expr_corpus.rank(queries, k_expressions)
-        window = time_window(query, today or as_of or dt.date.today())
+        day = today or as_of or dt.date.today()
+        named = meeting_window(query, material.days, day)
+        window = named or time_window(query, day)
+
+        def inside(e: Expression) -> bool:
+            return window is not None and e.date is not None and window[0] <= e.date <= window[1]
+
         if window is not None:
-            within = {
-                ref: e for ref, e in expr_corpus.candidates.items() if e.date and window[0] <= e.date <= window[1]
-            }
+            within = {ref: e for ref, e in expr_corpus.candidates.items() if inside(e)}
             _add_new(ranked_expr, expr_corpus.subset(within).rank(queries, K_WINDOW), lambda e: e.expression_id)
         for alternative in zip(alternatives, vectors[len(main) :], strict=True):
             _add_new(ranked_items, item_corpus.rank([alternative], K_ALTERNATIVE_ITEMS), lambda i: i.item_id)
             _add_new(ranked_expr, expr_corpus.rank([alternative], K_ALTERNATIVE_EXPRESSIONS), lambda e: e.expression_id)
-        ranked_others = material.others.rank(queries, K_OTHERS)
-        day = today or as_of or dt.date.today()
-        entries = for_chat(self.store.list_ledger(), query, day, as_of) if self.ledger else []
+        ranked_others = material.others.rank(queries, K_MEETING_OTHERS if material.meetings else K_OTHERS)
+        ledger = self.store.list_ledger() if self.ledger else []
+        if named is not None:
+            # The named meetings come first, what other people said there as well, and their ledger entries alone.
+            ranked_expr = [p for p in ranked_expr if inside(p[0])] + [p for p in ranked_expr if not inside(p[0])]
+            there = material.others.subset({r: e for r, e in material.others.candidates.items() if inside(e)})
+            ranked_others = there.rank(queries, K_NAMED_OTHERS) + [p for p in ranked_others if not inside(p[0])]
+            ledger = [e for e in ledger if e.meeting_date and named[0] <= e.meeting_date <= named[1]]
+        entries = for_chat(ledger, query, day, as_of, asked=named is not None) if ledger else []
+        found = [e for e, _ in [*ranked_expr, *ranked_others]]
+        if named is not None:
+            found = [e for e in found if inside(e)] + [e for e in found if not inside(e)]
         return PersonaContext(
             ranked_items,
             ranked_expr,
@@ -844,7 +892,7 @@ class PersonaChat:
             meeting_record=self.meeting_record,
             audience=self.audience,
             assistant=self.assistant,
-            passages=_passages(material, [e for e, _ in [*ranked_expr, *ranked_others]]),
+            passages=_passages(material, found),
         )
 
     def _items(self, as_of: dt.date | None, view: ExpressionView, hidden: PrivateWords) -> dict[str, PersonaItem]:

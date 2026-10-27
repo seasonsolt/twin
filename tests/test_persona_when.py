@@ -5,7 +5,7 @@ import datetime as dt
 import pytest
 
 from twin.llm import FakeLLM
-from twin.persona.when import named_month, time_window
+from twin.persona.when import meeting_window, named_month, time_window
 
 TODAY = dt.date(2023, 4, 22)  # a Saturday
 
@@ -110,3 +110,36 @@ def test_named_month_is_the_latest_such_month_unless_a_year_is_given(
     text: str, expected: tuple[dt.date, dt.date] | None
 ) -> None:
     assert named_month(text, dt.date(2024, 3, 25)) == expected
+
+
+MEETINGS = [d("2019-07-02"), d("2019-07-08"), d("2023-07-08"), d("2026-03-02"), d("2026-05-25")]
+NOW = dt.date(2026, 10, 27)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("2019年7月8号那次会上定了哪些事？", ("2019-07-08", "2019-07-08")),
+        # Without a year, the latest meeting on that day.
+        ("7月8号的会上说了什么", ("2023-07-08", "2023-07-08")),
+        ("2019年7月的会", ("2019-07-01", "2019-07-31")),
+        ("最近一次周会定了哪些事？", ("2026-05-25", "2026-05-25")),
+        ("上次开会说的那个方案", ("2026-05-25", "2026-05-25")),
+        ("上上次开会定了哪些事？", ("2026-03-02", "2026-03-02")),
+        ("最近几次会都谈了什么", ("2023-07-08", "2026-05-25")),
+        # A month with no meeting, or a day with none, names none.
+        ("2024年3月的会", None),
+        ("8月9号的会", None),
+        ("客户案例怎么用", None),
+    ],
+)
+def test_a_meeting_named_by_its_day_month_or_order(text: str, expected: tuple[str, str] | None) -> None:
+    window = meeting_window(text, MEETINGS, NOW)
+    assert window == (expected and (d(expected[0]), d(expected[1])))
+
+
+def test_without_meetings_nothing_is_named_as_one() -> None:
+    assert meeting_window("最近一次会定了什么", [], NOW) is None
+    assert meeting_window("2019年7月8号的会", [], NOW) is None
+    # Meetings later than the day asked from are not yet held.
+    assert meeting_window("最近一次会", MEETINGS, d("2026-04-01")) == (d("2026-03-02"), d("2026-03-02"))

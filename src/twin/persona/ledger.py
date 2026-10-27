@@ -480,22 +480,25 @@ def brief(ledger: list[LedgerEntry], person: str, as_of: dt.date) -> Brief:
 # alone (without its person or a ledger word in the question).
 CHAT_ENTRIES = 12
 CHAT_KEYWORD_SHARE = 0.4
-# Words that ask about the ledger itself: who promised what, what was decided, objected to, done, or due.
+# Words that ask about the ledger itself: who promised what, objected to, finished, or has due. Words any question about
+# a meeting has (会上, 定了, 负责) are not among them: they would bring every open entry into an answer about something
+# else; a meeting named by its day brings its own entries (``asked``).
 LEDGER_CUE = re.compile(
-    r"答应|承诺|欠|待办|跟进|进展|进度|截止|到期|逾期|拖|决定|定了|定下|拍板|负责|谁来|交付|完成|做完|搞定|落实|"
-    r"异议|反对|顾虑|意见|账本|会上|开会|周会|例会|评审|见面|追问|催|deadline|todo",
+    r"答应|承诺|欠|待办|跟进|进展|进度|截止|到期|逾期|拖|拍板|谁来|交付|完成|做完|搞定|落实|"
+    r"异议|反对|顾虑|账本|追问|催|deadline|todo",
     re.IGNORECASE,
 )
 
 
 def for_chat(
-    ledger: list[LedgerEntry], query: str, today: dt.date, as_of: dt.date | None = None
+    ledger: list[LedgerEntry], query: str, today: dt.date, as_of: dt.date | None = None, *, asked: bool = False
 ) -> list[tuple[LedgerEntry, LedgerStatus]]:
     """The entries a chat question is about, each with its current status, most relevant first: those of a person
     the question names, then, when the question asks about the ledger (a promise, a decision, a deadline), the open
     decisions and commitments by urgency, then entries sharing its keywords; a progress report follows the decision or
     commitment it is about. Only what was said by ``as_of`` counts, and statuses are worked out from that alone.
-    Empty when the question touches none of it."""
+    Empty when the question touches none of it. ``asked``: the question is about these entries (those of a meeting it
+    names), as a ledger word would say."""
     live = [
         e
         for e in ledger
@@ -509,7 +512,7 @@ def for_chat(
     candidates = [e for e in live if e.kind in ("objection", "progress") or e.entry_id in current]
     names = {n for e in live for n in (e.owner, e.counterpart) if n not in (SELF, UNKNOWN_OWNER, "")}
     named = {n for n in names if n in query}
-    cue = bool(LEDGER_CUE.search(query))
+    cue = asked or bool(LEDGER_CUE.search(query))
     keywords = BM25({e.entry_id: f"{e.owner} {e.counterpart} {e.what} {e.quote} {e.meeting_title}" for e in candidates})
     scores = keywords.scores(query)
     best = max(scores.values(), default=0.0)

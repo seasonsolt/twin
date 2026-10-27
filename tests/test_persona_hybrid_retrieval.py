@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as dt
 import math
 import sqlite3
 import threading
@@ -18,7 +19,7 @@ from twin.persona import chat as pc
 from twin.persona import lexical
 from twin.persona.items import PersonaItem
 from twin.persona.lexical import BM25, cached, tokenize
-from twin.persona.schema import ChatTurn, Expression, Source, SourceKind
+from twin.persona.schema import ChatTurn, Expression, ParsedSource, Source, SourceKind
 from twin.persona.sources import parse_chat, parse_media, pseudonym
 from twin.persona.store import PersonaStore
 from twin.persona.tiers import COLLEAGUE, SELF, Audience
@@ -425,3 +426,36 @@ def test_windows_that_overlap_in_a_meeting_are_one_passage() -> None:
         ("m#00020", 15 - pc.PASSAGE_BEFORE, 20 + pc.PASSAGE_AFTER),
         ("m#00035", 35 - pc.PASSAGE_BEFORE, 39),
     ]
+
+
+def test_a_meeting_recorded_without_its_day_is_dated_by_its_file_and_found_by_that_day() -> None:
+    settings = Settings(target_name="张三")
+
+    def recording(title: str, words: str) -> ParsedSource:
+        source = Source(
+            source_id=f"src_{title}",
+            kind=SourceKind.AUDIO,
+            title=title,
+            origin=f"录音库：{title}.mp3",
+            imported_at="2026-10-27T00:00:00+00:00",
+            n_expressions=0,
+            n_target=0,
+            text_state="raw",
+            media_status="ready",
+        )
+        return parse_media(source, [("张三", f"{words}{i}", True) for i in range(30)])
+
+    with PersonaStore(":memory:") as store:
+        store.put_source(recording("190708_1834", "游轮项目先查撤单数据"))
+        # The other meeting shares every word of the question: only the day tells them apart.
+        store.put_source(recording("190801_1830", "那次会上定了哪些事情要查"))
+        chat = pc.PersonaChat(store, FakeLLM(lambda *a: {}), ConstantEmbedder(), settings)
+        assert pc.meeting_day(store.get_source("src_190708_1834")) == dt.date(2019, 7, 8)
+        ctx = chat.retrieve("2019年7月8号那次会上定了哪些事？", today=dt.date(2026, 10, 27))
+        assert ctx.window == (dt.date(2019, 7, 8), dt.date(2019, 7, 8))
+        assert ctx.passages[0].title == "190708_1834"
+        assert "- [src_190708_1834#" in pc.material_text(ctx) and " 会议 2019-07-08 190708_1834：" in pc.material_text(
+            ctx
+        )
+        # The latest meeting is the one asked about as the last.
+        assert chat.retrieve("最近一次会说了什么", today=dt.date(2026, 10, 27)).passages[0].title == "190801_1830"

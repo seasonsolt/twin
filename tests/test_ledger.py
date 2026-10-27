@@ -372,3 +372,17 @@ def test_chat_sees_the_named_persons_entries_open_ones_on_ledger_words_and_nothi
     assert dict((e.entry_id, s) for e, s in lg.for_chat(ledger, "报表导出", today, dt.date(2026, 10, 13))) == {
         "export": "open"
     }
+
+
+def test_a_question_about_a_meeting_brings_only_entries_it_shares_words_with_unless_it_asks_for_them() -> None:
+    today = dt.date(2026, 10, 20)
+    ledger = [
+        entry("budget", "decision", lg.SELF, "2026-10-12", 1, what="冻结市场预算"),
+        entry("export", "commitment", "陈工", "2026-10-12", 2, what="修好报表导出", due=dt.date(2026, 10, 15)),
+    ]
+    # 会上, 定了: words of any question about a meeting, which bring no open entry about something else.
+    assert [e.entry_id for e, _ in lg.for_chat(ledger, "客户案例的事会上定了什么？", today)] == []
+    assert [e.entry_id for e, _ in lg.for_chat(ledger, "市场预算会上定了什么？", today)] == ["budget"]
+    # The entries of a meeting the question names by its day are what it asks about.
+    asked = lg.for_chat(ledger, "10月12号的会上定了什么？", today, asked=True)
+    assert [e.entry_id for e, _ in asked] == ["export", "budget"]

@@ -78,3 +78,39 @@ def named_month(text: str, today: dt.date) -> tuple[dt.date, dt.date] | None:
     start = dt.date(int(year) if year else today.year - (month > today.month), month, 1)
     following = dt.date(start.year + start.month // 12, start.month % 12 + 1, 1)
     return start, following - dt.timedelta(days=1)
+
+
+_DAY_ZH = re.compile(r"(?:(\d{4})年)?(1[0-2]|0?[1-9])月(3[01]|[12]\d|0?[1-9])[日号]")
+_SECOND_LAST = re.compile(r"上上(?:一)?次")
+_LAST_FEW = re.compile(r"最近(?:两|三|几)次")
+_LAST_ONE = re.compile(r"最近一次|最新一次|最近的一次|最近那次|上一次|上次")
+# How many of the latest meetings "最近几次" means.
+LAST_FEW = 3
+
+
+def meeting_window(text: str, days: list[dt.date], today: dt.date) -> tuple[dt.date, dt.date] | None:
+    """The meetings a question names by their day ("7月8号的会"), month ("2019年7月") or order ("最近一次",
+    "上上次", "最近几次"), as an inclusive date range among ``days`` (the twin's meeting days, in order). A day
+    without a year is the latest meeting on that day; None when the question names no meeting this way."""
+    past = [d for d in days if d <= today]
+    if not past:
+        return None
+    if (day := _DAY_ZH.search(text)) is not None:
+        month, number = int(day.group(2)), int(day.group(3))
+        if day.group(1):
+            try:
+                named = dt.date(int(day.group(1)), month, number)
+            except ValueError:
+                return None
+            return named, named
+        same = [d for d in past if (d.month, d.day) == (month, number)]
+        return (same[-1], same[-1]) if same else None
+    if (span := named_month(text, today)) is not None:
+        return span if any(span[0] <= d <= span[1] for d in past) else None
+    if _SECOND_LAST.search(text):
+        return (past[-2], past[-2]) if len(past) > 1 else None
+    if _LAST_FEW.search(text):
+        return past[-LAST_FEW:][0], past[-1]
+    if _LAST_ONE.search(text):
+        return past[-1], past[-1]
+    return None

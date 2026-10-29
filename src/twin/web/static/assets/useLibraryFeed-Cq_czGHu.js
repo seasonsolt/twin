@@ -1,0 +1,1 @@
+import{r as a}from"./react-BbMhOMtm.js";import{aD as e}from"./index-rMEP9CRx.js";function l(){const o=e(r=>r.library),s=e(r=>r.error),c=e(r=>r.version),t=a.useCallback(()=>e.getState().refresh(!0),[]),n=a.useCallback(()=>e.getState().refresh(),[]);return a.useEffect(()=>{const r=e.getState().attach();return t(),r},[t]),{library:o,error:s,version:c,load:t,poll:n}}export{l as u};

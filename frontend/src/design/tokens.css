@@ -47,6 +47,14 @@
   --graph-d8: #c5bc80;
   --graph-d9: #df947f;
   --graph-d10: #a9a3cf;
+  /* Frosted layers over the twin's core (GlassPanel, PillNav, CitationChip); the 素体 themes make them dark glass. */
+  --glass: rgb(255 255 255 / 0.6);
+  --glass-strong: rgb(255 255 255 / 0.85);
+  --glass-line: var(--border);
+  --glass-shadow: inset 0 1px 0 rgb(255 255 255 / 0.7), var(--elevation-2);
+  --glow-bg: var(--soft);
+  --core: var(--sun);
+  --accent-glow: color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
 /* Themes: 朱砂红 above is the default; <html data-theme> picks another (stores/theme.ts). */
@@ -96,6 +104,12 @@
   --elevation-1: 0 2px 6px rgb(0 0 0 / 0.3);
   --elevation-2: 0 6px 20px rgb(0 0 0 / 0.4);
   --elevation-3: 0 16px 48px rgb(0 0 0 / 0.5);
+  --glass: rgb(32 28 24 / 0.6);
+  --glass-strong: rgb(42 36 32 / 0.88);
+  --glass-line: rgb(255 255 255 / 0.08);
+  --glass-shadow: inset 0 1px 0 rgb(255 255 255 / 0.08), var(--elevation-2);
+  --glow-bg: #2a2420;
+  --core: #f5e6d6;
 }
 
 :root:is([data-theme='dark'], [data-theme='ink']) {
@@ -114,6 +128,160 @@
   --graph-d8: #d4ca91;
   --graph-d9: #efa992;
   --graph-d10: #bcb6e0;
+}
+
+/* 素体: the persona edition's three dark palettes, one porcelain-on-night body and a single warm accent each
+   (体温 coral, 琥珀 amber, 月光 ice). The memory graph sits on the same night in every one. */
+:root:is([data-theme='sutai'], [data-theme='amber'], [data-theme='moon']) {
+  color-scheme: dark;
+  --sidebar: var(--glass);
+  --elevation-1: 0 2px 6px rgb(0 0 0 / 0.35);
+  --elevation-2: 0 8px 24px rgb(0 0 0 / 0.45);
+  --elevation-3: 0 24px 60px rgb(0 0 0 / 0.5);
+  --card-shadow: 0 1px 0 var(--border);
+  --glass-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.1), 0 24px 60px rgb(0 0 0 / 0.45);
+}
+
+:root[data-theme='sutai'] {
+  --canvas: #07090b;
+  --soft: #141a1e;
+  --sun: #8a4526;
+  --coral: #8a3b2c;
+  --note: #1e1814;
+  --surface: #0e1216;
+  --surface-raised: #161b20;
+  --border: #262e35;
+  --text-primary: #edeae4;
+  --text-secondary: #c9cfd2;
+  --text-tertiary: #9aa5ac;
+  --accent: #ff8a5b;
+  --accent-ink: #ffb38a;
+  --accent-hover: #ff9d74;
+  --accent-pressed: #f2794a;
+  --on-accent: #1a0d07;
+  --stage-bg: #0e1216;
+  --stage-ink: #edeae4;
+  --stage-ring: rgb(237 234 228 / 0.25);
+  --success: #6fbf9c;
+  --warning: #e6b45c;
+  --danger: #f28b91;
+  --info: #8fb3d9;
+  --glass: rgb(22 27 32 / 0.55);
+  --glass-strong: rgb(18 22 26 / 0.62);
+  --glass-line: rgb(255 255 255 / 0.08);
+  --glow-bg: #1c1310;
+  --core: #ffe2cc;
+  --accent-glow: rgb(255 138 91 / 0.45);
+  --graph-backdrop: #0a0d0f;
+  --graph-ink: #edeae4;
+  --graph-center: #ffe2cc;
+  --graph-source: #9aa5ac;
+  --graph-danger: #ff8e98;
+  --graph-d1: #e0b48a;
+  --graph-d2: #ff8a5b;
+  --graph-d3: #d6b36e;
+  --graph-d4: #8fb3d9;
+  --graph-d5: #7fc1b4;
+  --graph-d6: #b9a3d6;
+  --graph-d7: #e59ab4;
+  --graph-d8: #a9c47f;
+  --graph-d9: #e3d08e;
+  --graph-d10: #f3f1ec;
+}
+
+:root[data-theme='amber'] {
+  --canvas: #0a0a08;
+  --soft: #17150f;
+  --sun: #7e5a1e;
+  --coral: #7a5520;
+  --note: #1f1a10;
+  --surface: #100f0c;
+  --surface-raised: #1a1812;
+  --border: #2c281f;
+  --text-primary: #eee7d8;
+  --text-secondary: #cbc3b2;
+  --text-tertiary: #9c9584;
+  --accent: #e8b45a;
+  --accent-ink: #f2ce8a;
+  --accent-hover: #eec173;
+  --accent-pressed: #dca548;
+  --on-accent: #1a1205;
+  --stage-bg: #100f0c;
+  --stage-ink: #eee7d8;
+  --stage-ring: rgb(238 231 216 / 0.25);
+  --success: #8fcb9a;
+  --warning: #ebc27a;
+  --danger: #f28b80;
+  --info: #9db7c9;
+  --glass: rgb(28 26 20 / 0.55);
+  --glass-strong: rgb(24 22 17 / 0.62);
+  --glass-line: rgb(255 240 210 / 0.08);
+  --glow-bg: #1e180c;
+  --core: #fff1d0;
+  --accent-glow: rgb(232 180 90 / 0.45);
+  --graph-backdrop: #0c0b08;
+  --graph-ink: #eee7d8;
+  --graph-center: #fff1d0;
+  --graph-source: #9c9584;
+  --graph-danger: #f28b80;
+  --graph-d1: #d9a27a;
+  --graph-d2: #e8b45a;
+  --graph-d3: #c7c07a;
+  --graph-d4: #9db7c9;
+  --graph-d5: #8cbfa0;
+  --graph-d6: #c3a7c9;
+  --graph-d7: #e09a8c;
+  --graph-d8: #b6c77e;
+  --graph-d9: #e6d3a3;
+  --graph-d10: #f4eee2;
+}
+
+:root[data-theme='moon'] {
+  --canvas: #060a10;
+  --soft: #111a24;
+  --sun: #2f5f80;
+  --coral: #2f5470;
+  --note: #0f1b26;
+  --surface: #0b111a;
+  --surface-raised: #131c27;
+  --border: #233140;
+  --text-primary: #e6ecf2;
+  --text-secondary: #bcc7d2;
+  --text-tertiary: #8d9aa8;
+  --accent: #9ccfea;
+  --accent-ink: #c4e3f4;
+  --accent-hover: #aed8ee;
+  --accent-pressed: #8ac3e0;
+  --on-accent: #06121a;
+  --stage-bg: #0b111a;
+  --stage-ink: #e6ecf2;
+  --stage-ring: rgb(230 236 242 / 0.25);
+  --success: #7ccfa4;
+  --warning: #e6c27a;
+  --danger: #f2949a;
+  --info: #a9b8f0;
+  --glass: rgb(18 26 36 / 0.55);
+  --glass-strong: rgb(14 20 28 / 0.62);
+  --glass-line: rgb(220 235 255 / 0.08);
+  --glow-bg: #0f1a26;
+  --core: #eaf6ff;
+  --accent-glow: rgb(156 207 234 / 0.45);
+  --graph-backdrop: #070c13;
+  --graph-ink: #e6ecf2;
+  --graph-center: #eaf6ff;
+  --graph-source: #8d9aa8;
+  --graph-danger: #f2949a;
+  --graph-d1: #c9b8a0;
+  --graph-d2: #9ccfea;
+  --graph-d3: #b7c3d9;
+  --graph-d4: #7fa8e0;
+  --graph-d5: #7ccfc4;
+  --graph-d6: #b0a2e0;
+  --graph-d7: #d9a7c4;
+  --graph-d8: #a7d09a;
+  --graph-d9: #d8d2a8;
+  --graph-d10: #f2f6fa;
 }
 
 @theme inline {
@@ -146,6 +314,11 @@
   --color-warning: var(--warning);
   --color-danger: var(--danger);
   --color-info: var(--info);
+  --color-glass: var(--glass);
+  --color-glass-strong: var(--glass-strong);
+  --color-glass-line: var(--glass-line);
+  --color-core: var(--core);
+  --shadow-glass: var(--glass-shadow);
   --shadow-elevation-1: var(--elevation-1);
   --shadow-elevation-2: var(--elevation-2);
   --shadow-elevation-3: var(--elevation-3);
@@ -153,12 +326,18 @@
   --font-sans:
     -apple-system, BlinkMacSystemFont, 'Helvetica Neue', 'PingFang SC',
     'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
-  /* Corners: controls 8, list rows 12, cards and dialogs 16, pills and portraits full. */
+  /* The twin's own voice (RiseText) is a Song face; sources and dates are monospaced. Both are system fonts. */
+  --font-voice:
+    'Songti SC', 'STSong', 'Noto Serif CJK SC', 'Source Han Serif SC', serif;
+  --font-mono:
+    'SF Mono', ui-monospace, Menlo, 'Cascadia Mono', Consolas, monospace;
+  /* Corners: controls 8, list rows 12, cards and dialogs 16, glass panels 24, pills and portraits full. */
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 16px;
   --radius-bubble: 18px;
   --radius-chat: 20px;
+  --radius-glass: 24px;
   --radius-full: 9999px;
   /* Type: 12 / 13 / 14 (body) / 15 / 16 / 18 / 22 / 26px, with Tailwind's line heights. */
   --text-xs: 12px;
@@ -408,6 +587,16 @@
   max-width: 1120px;
   margin-inline: auto;
 }
+/* 素体: the persona edition's own pages (记忆, 资料) sit in a glow of the theme, as its chat does. */
+.app-shell:has(.profile-page[data-look='sutai']) {
+  background: radial-gradient(
+      ellipse 60% 45% at 55% 0%,
+      var(--glow-bg) 0%,
+      transparent 70%
+    )
+    var(--canvas);
+  background-attachment: fixed;
+}
 .memory-graph-panel {
   display: flex;
   flex-direction: column;
@@ -642,6 +831,15 @@
 }
 .theme-swatch[data-swatch='ink'] {
   background: linear-gradient(135deg, #2a2420 50%, #e0674f 50%);
+}
+.theme-swatch[data-swatch='sutai'] {
+  background: radial-gradient(circle at 35% 30%, #ffe2cc, #ff8a5b 70%);
+}
+.theme-swatch[data-swatch='amber'] {
+  background: radial-gradient(circle at 35% 30%, #fff1d0, #e8b45a 70%);
+}
+.theme-swatch[data-swatch='moon'] {
+  background: radial-gradient(circle at 35% 30%, #eaf6ff, #9ccfea 70%);
 }
 .stage-header {
   position: relative;

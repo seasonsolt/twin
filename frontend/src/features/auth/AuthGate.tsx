@@ -4,6 +4,7 @@ import { Button, Skeleton } from '../../components/ui';
 import { ApiError } from '../../lib/api';
 import { useAuth } from '../../stores/auth';
 import { usePersonas } from '../../stores/personas';
+import { useTheme } from '../../stores/theme';
 import { Login } from './Login';
 import { local, loginPath, takeReturn } from './returnTo';
 
@@ -17,6 +18,11 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const identity = useAuth((state) => state.identity);
   const signedOut = useAuth((state) => state.signedOut);
+  // The persona edition shows its own palettes: once the server has said which edition this is, take them up.
+  const persona = identity ? identity.edition === 'persona' : null;
+  useEffect(() => {
+    if (persona !== null) useTheme.getState().adoptEdition(persona);
+  }, [persona]);
   const [checking, setChecking] = useState(true);
   const [error, setError] = useState('');
   // Back from the company sign-in, which returns to the start page: the page it was started from.

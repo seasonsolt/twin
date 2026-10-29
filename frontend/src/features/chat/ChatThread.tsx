@@ -43,6 +43,7 @@ import { useLensChoices } from '../lens/useLensChoices';
 import { useIdentity } from '../identity/useIdentity';
 import { MemoryUpdating } from '../memories/BuildProgress';
 import { SetupCard } from '../setup/SetupCard';
+import { ChatCore } from './ChatCore';
 import { MessageText } from './MessageText';
 import { NoteCard } from './NoteCard';
 import { ReplyLine } from './ReplyDetails';
@@ -112,6 +113,7 @@ export function ChatThread({
   target,
   assistant = false,
   trial,
+  look,
   reflection = 'ask',
 }: {
   active: boolean;
@@ -129,6 +131,8 @@ export function ChatThread({
   assistant?: boolean;
   /** 看同事会得到什么 on or off; given only where the person can ask it. */
   trial?: { on: boolean; onChange(on: boolean): void };
+  /** The persona edition's 素体: the twin's core stands over the chat in place of its portrait. */
+  look?: 'sutai';
   /** The way the person is talking with their assistant about themself, chosen beside the box. */
   reflection?: Reflection;
 }) {
@@ -301,6 +305,12 @@ export function ChatThread({
   };
   return (
     <div className="chat-thread">
+      {look === 'sutai' && (
+        <ChatCore
+          pulse={chat.turns.length}
+          thinking={chat.busy && !chat.newest}
+        />
+      )}
       <div className="chat-scroll">
         <div className="chat-column-grid">
           <PersonaFade>
@@ -340,9 +350,11 @@ export function ChatThread({
                   <ChatSurface variant="empty">
                     {(!setup || setupReady) && (
                       <>
-                        <ChatIdentity size="empty">
-                          <PersonaPortrait persona={persona} />
-                        </ChatIdentity>
+                        {look !== 'sutai' && (
+                          <ChatIdentity size="empty">
+                            <PersonaPortrait persona={persona} />
+                          </ChatIdentity>
+                        )}
                         <Heading
                           level={2}
                           size="display"

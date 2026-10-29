@@ -36,6 +36,9 @@ const cardVariants = {
   dashed: 'border border-dashed border-tertiary bg-surface',
   /** Danger zone. */
   danger: 'border border-danger/20 bg-surface shadow-card',
+  /** 素体's glass over the page's glow, for the persona edition's own pages. */
+  glass:
+    'border border-glass-line bg-glass shadow-glass backdrop-blur-xl backdrop-saturate-150',
 };
 const cardPadding = {
   none: '',

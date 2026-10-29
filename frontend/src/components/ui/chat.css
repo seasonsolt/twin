@@ -374,3 +374,120 @@
     box-shadow: var(--elevation-3);
   }
 }
+
+/*
+ * 素体, the persona edition's chat (the page sets data-look='sutai'). The twin's core stands over the conversation,
+ * large while nothing has been said and a band once something has; its answers are set in the voice face and the
+ * newest one rises out of a blur; the person's own words and the box they write in are glass over the glow.
+ */
+.chat-core {
+  display: none;
+}
+.chat-page[data-look='sutai'] {
+  background: radial-gradient(
+    ellipse 70% 55% at 50% 16%,
+    var(--glow-bg) 0%,
+    var(--canvas) 72%
+  );
+}
+.chat-page[data-look='sutai'] .chat-surface-panel,
+.chat-page[data-look='sutai'] .chat-composer {
+  background: transparent;
+}
+.chat-page[data-look='sutai'] .chat-surface-sheet {
+  background: var(--glass);
+  border-right: 1px solid var(--glass-line);
+  backdrop-filter: blur(24px) saturate(140%);
+}
+.chat-page[data-look='sutai'] .chat-core {
+  display: block;
+  flex-shrink: 0;
+  height: var(--spacing-40);
+  transition: height 0.9s cubic-bezier(0.22, 1, 0.36, 1);
+  mask-image: linear-gradient(to bottom, black 72%, transparent);
+}
+.chat-page[data-look='sutai'][data-empty='true'] .chat-core {
+  height: var(--spacing-64);
+}
+.chat-page[data-look='sutai'] .chat-core[data-thinking='true'] {
+  animation: sutai-think 1.6s ease-in-out infinite;
+}
+.chat-page[data-look='sutai'] .chat-scroll {
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    black var(--spacing-12)
+  );
+}
+.chat-page[data-look='sutai'] .chat-surface-empty h2 {
+  font-family: var(--font-voice);
+  font-weight: 400;
+  letter-spacing: 0.12em;
+}
+.chat-page[data-look='sutai'] .chat-message[data-speaker='twin'] .message-text {
+  font-family: var(--font-voice);
+  font-weight: 300;
+  letter-spacing: 0.02em;
+  text-shadow: 0 0 var(--spacing-6)
+    color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.chat-page[data-look='sutai']
+  .chat-message[data-last-answer='true']
+  .twin-bubble {
+  animation: sutai-rise 0.9s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.chat-page[data-look='sutai'] .chat-message[data-speaker='user'] {
+  border: 1px solid var(--glass-line);
+  border-bottom-right-radius: var(--spacing-1);
+  background: var(--glass);
+  color: var(--text-secondary);
+  backdrop-filter: blur(16px);
+}
+.chat-page[data-look='sutai'] .chat-surface-composer {
+  @apply rounded-glass;
+  border-color: var(--glass-line);
+  background: var(--glass);
+  box-shadow: var(--glass-shadow);
+  backdrop-filter: blur(24px) saturate(140%);
+}
+.chat-page[data-look='sutai'] .chat-action-send:not(:disabled) {
+  background: radial-gradient(
+    circle at 35% 30%,
+    var(--core) 0%,
+    var(--accent) 62%
+  );
+  box-shadow: 0 0 var(--spacing-4) var(--accent-glow);
+}
+@keyframes sutai-rise {
+  from {
+    opacity: 0;
+    filter: blur(8px);
+    transform: translateY(var(--spacing-2));
+  }
+}
+@keyframes sutai-think {
+  50% {
+    opacity: 0.7;
+  }
+}
+@media (max-width: 767px) {
+  .chat-page[data-look='sutai'] .chat-core {
+    height: var(--spacing-24);
+  }
+  .chat-page[data-look='sutai'][data-empty='true'] .chat-core {
+    height: var(--spacing-48);
+  }
+  .chat-page[data-look='sutai'] .chat-topbar {
+    border-bottom-color: var(--glass-line);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-page[data-look='sutai'] .chat-core,
+  .chat-page[data-look='sutai'] .chat-core[data-thinking='true'],
+  .chat-page[data-look='sutai']
+    .chat-message[data-last-answer='true']
+    .twin-bubble {
+    transition: none;
+    animation: none;
+  }
+}

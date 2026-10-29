@@ -39,7 +39,7 @@ import {
   usePersonaEdition,
   type Feature,
 } from '../../stores/auth';
-import { THEMES, useTheme } from '../../stores/theme';
+import { useThemes } from '../../stores/theme';
 
 /** The phone's bottom tabs; the wide side bar has its own entries (below). */
 const navItems: {
@@ -329,7 +329,7 @@ export function SidebarAccount() {
   const openSettings = useOpenSettings();
   const down = useSystem((state) => failing(state.data).length);
   const held = useSystem((state) => rebuildHeld(state.data));
-  const { theme, setTheme } = useTheme();
+  const { theme, setTheme, options } = useThemes();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   if (!identity) return null;
@@ -343,7 +343,7 @@ export function SidebarAccount() {
         count={waiting}
         error={error}
         theme={
-          <ThemePicker value={theme} options={THEMES} onChange={setTheme} />
+          <ThemePicker value={theme} options={options} onChange={setTheme} />
         }
         groups={[
           self && waiting > 0

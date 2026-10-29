@@ -1358,3 +1358,33 @@ it('brings what an answer rests on into view when it is opened', async () => {
     Reflect.deleteProperty(Element.prototype, 'scrollIntoView');
   }
 });
+
+it("puts the twin's core over a persona twin's chat in place of its portrait, and lets it think while it answers", async () => {
+  useAuth.setState({
+    identity: {
+      email: null,
+      admin: true,
+      auth_enabled: false,
+      edition: 'persona',
+    },
+  });
+  try {
+    mount();
+    expect(
+      await screen.findByRole('img', { name: '分身的心核' }),
+    ).toBeVisible();
+    expect(screen.getByRole('heading', { name: '和测试人聊聊' })).toBeVisible();
+    await submit();
+    expect(screen.getByRole('img', { name: '分身正在想' })).toBeVisible();
+  } finally {
+    useAuth.setState({ identity: null });
+  }
+});
+
+it('keeps the portrait and no core over a team twin’s chat', async () => {
+  mount();
+  expect(
+    await screen.findByRole('heading', { name: '和测试人聊聊' }),
+  ).toBeVisible();
+  expect(screen.queryByRole('img', { name: '分身的心核' })).toBeNull();
+});

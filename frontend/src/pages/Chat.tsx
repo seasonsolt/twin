@@ -129,6 +129,8 @@ export function Chat() {
     setDraft(ask);
   }, [ask, askedReflection, key, clearChat, setDraft, setReflection]);
   const personaEdition = usePersonaEdition();
+  // The persona edition's chat wears 素体: the twin's core over the conversation, its words in the voice face.
+  const look = personaEdition ? 'sutai' : undefined;
   const [scope, setScope] = useState<Scope>({ kind: 'all' });
   // What makes the list ask again: a conversation written, renamed or deleted here, or a task changed.
   const revision = `${chat.written}|${(work.tasks ?? [])
@@ -570,6 +572,7 @@ export function Chat() {
       className="chat-page chat-redesign"
       data-sheet={sheetOpen}
       data-empty={empty}
+      data-look={look}
     >
       <audio ref={audio.audioRef} preload="auto" className="hidden" />
       {sheetOpen && (
@@ -677,6 +680,7 @@ export function Chat() {
                   ? { on: trialOn, onChange: setTrialOn }
                   : undefined
               }
+              look={look}
               reflection={assistant && !workOn ? reflection : 'ask'}
             />
           )}

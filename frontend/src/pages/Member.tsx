@@ -133,7 +133,7 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
   const choose = (next: string) =>
     setParams(next === 'overview' ? {} : { section: next }, { replace: true });
   return (
-    <div className="profile-page">
+    <div className="profile-page" data-look={team ? undefined : 'sutai'}>
       <Page>
         <MemberHeader
           name={name}

@@ -475,6 +475,38 @@ const pages: {
     setup: (page) =>
       page.addInitScript(() => localStorage.setItem('twin:theme', 'ink')),
   },
+  // The persona edition in 素体: its chat with the core over an empty chat and as a band over the conversation, and
+  // its own 记忆 and 资料. Reduced motion holds the core and the constellation on one frame, so each shot is the same
+  // every time.
+  ...(
+    [
+      ['chat-persona', '/#/chat', '我会先把发布时间定在下周二', 'c-plan'],
+      ['chat-persona-empty', '/#/chat', '和林舟聊聊', ''],
+      // 记忆 as a constellation of the ten aspects, and 资料 under the core, each piece as the thing it is.
+      ['member-persona', '/#/profile', '十个方面', ''],
+      ['member-persona-sources', '/#/memories', '已添加的记忆', ''],
+    ] as const
+  ).map(([name, path, ready, conversation]) => ({
+    name,
+    path,
+    ready,
+    setup: async (page: Page) => {
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      await page.route('**/api/whoami', (route) =>
+        route.fulfill({
+          json: {
+            email: null,
+            admin: true,
+            auth_enabled: false,
+            edition: 'persona',
+          },
+        }),
+      );
+      await page.addInitScript((opened) => {
+        if (opened) localStorage.setItem('twin.current.conversation', opened);
+      }, conversation);
+    },
+  })),
 ];
 
 for (const { name, path, ready, viewport, setup } of pages) {

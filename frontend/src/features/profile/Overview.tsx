@@ -19,6 +19,7 @@ import {
   toast,
   type AspectLayer,
 } from '../../components/ui';
+import { AspectConstellation } from '../../components/effects';
 import { api } from '../../lib/api';
 import { basePath } from '../../lib/base';
 import { usePersonaId, usePersonaState } from '../../lib/usePersonaState';
@@ -29,8 +30,8 @@ import { useItemSearch } from './useItemSearch';
 import { useProfile } from './useProfile';
 import { MemoryUpdating } from '../memories/BuildProgress';
 import { FillDialog, type FillScope } from '../fill/FillDialog';
-import { useStatus } from '../../stores/status';
 import { usePersonaEdition } from '../../stores/auth';
+import { useStatus } from '../../stores/status';
 import { ITEM_PAGE_SIZE, usePagedItems } from './usePagedItems';
 
 export const topics: Record<string, string> = {
@@ -352,6 +353,9 @@ function Aspect({
 
 export function Overview({ ask }: { ask?: AskPerson }) {
   const personaId = usePersonaId();
+  // The persona edition shows the ten aspects as a constellation around the twin, on glass over the page's glow.
+  const sutai = usePersonaEdition();
+  const surface = sutai ? 'glass' : undefined;
   const profile = useProfile(true);
   // Made from the recording library and catching up with changed recordings: the profile waits for the update.
   const updating = !!useStatus((state) => state.data?.memory_updating);
@@ -405,8 +409,7 @@ export function Overview({ ask }: { ask?: AskPerson }) {
   // 补一补 is open: for what the twin knows least, or for one aspect; in the persona edition the person is asked
   // about their life instead, stage by stage (人生回顾).
   const [filling, setFilling] = useState<FillScope | null>(null);
-  const persona = usePersonaEdition();
-  const reviewing = persona && profile.canTier;
+  const reviewing = sutai && profile.canTier;
   // A link from a colleague asking for more of one aspect opens 补一补 on it, for the person it is meant for.
   const [params, setParams] = useSearchParams();
   const requested = params.get('fill');
@@ -442,7 +445,7 @@ export function Overview({ ask }: { ask?: AskPerson }) {
   const empty = !!profile.summary && total === 0;
   return (
     <div className="about-knowledge space-y-4 md:space-y-6">
-      <Card padding="roomy" className="space-y-6">
+      <Card padding="roomy" variant={surface} className="space-y-6">
         {profile.loading && <Skeleton className="h-40" />}
         {updating && <MemoryUpdating />}
         {profile.summaryError && !updating && (
@@ -458,20 +461,41 @@ export function Overview({ ask }: { ask?: AskPerson }) {
         )}
         {profile.summary && (
           <Toolbar stackOnMobile gap={6}>
-            <AspectRing
-              label={`${ASPECTS}里已了解 ${known} 个`}
-              segments={aspects.map((aspect) => ({
-                layer: layerOf(aspect.id),
-                level: aspect.level,
-              }))}
-            >
-              <Text size="xl" weight="semibold">
-                {known}/{aspects.length}
-              </Text>
-              <Text size="xs" tone="secondary">
-                个方面
-              </Text>
-            </AspectRing>
+            {sutai ? (
+              <div className="relative size-64 shrink-0">
+                <AspectConstellation
+                  aspects={aspects}
+                  selected={selected}
+                  onSelect={setChosen}
+                  label={`${ASPECTS}的星图，已了解 ${known} 个`}
+                  className="size-full"
+                />
+                <Text
+                  as="span"
+                  size="xs"
+                  tone="secondary"
+                  align="center"
+                  className="pointer-events-none absolute inset-x-0 bottom-1"
+                >
+                  {known}/{aspects.length} 个方面
+                </Text>
+              </div>
+            ) : (
+              <AspectRing
+                label={`${ASPECTS}里已了解 ${known} 个`}
+                segments={aspects.map((aspect) => ({
+                  layer: layerOf(aspect.id),
+                  level: aspect.level,
+                }))}
+              >
+                <Text size="xl" weight="semibold">
+                  {known}/{aspects.length}
+                </Text>
+                <Text size="xs" tone="secondary">
+                  个方面
+                </Text>
+              </AspectRing>
+            )}
             <Stack gap={4} grow>
               <Stack gap={1}>
                 <Heading level={3}>
@@ -538,7 +562,12 @@ export function Overview({ ask }: { ask?: AskPerson }) {
         )}
       </Card>
       {profile.summary && !empty && (
-        <Card padding="roomy" aria-label={ASPECTS} className="space-y-4">
+        <Card
+          padding="roomy"
+          variant={surface}
+          aria-label={ASPECTS}
+          className="space-y-4"
+        >
           <Toolbar stackOnMobile>
             <Heading level={3}>{ASPECTS}</Heading>
             <Row gap={2}>

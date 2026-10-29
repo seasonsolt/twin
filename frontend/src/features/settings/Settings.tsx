@@ -35,7 +35,7 @@ import {
   type SystemState,
 } from '../../stores/system';
 import { useTeam } from '../../stores/team';
-import { THEMES, useTheme } from '../../stores/theme';
+import { useThemes } from '../../stores/theme';
 import type { LibraryState } from '../../pages/Library';
 import { AliasList } from '../identity/AliasList';
 import { Channels } from '../profile/Channels';
@@ -128,10 +128,10 @@ function sectionStatus(
 }
 
 function Look() {
-  const { theme, setTheme } = useTheme();
+  const { theme, setTheme, options } = useThemes();
   return (
     <Section level={4} title="配色" description="只在这台设备上生效。">
-      <ThemePicker value={theme} options={THEMES} onChange={setTheme} named />
+      <ThemePicker value={theme} options={options} onChange={setTheme} named />
     </Section>
   );
 }

@@ -35,7 +35,7 @@ import { twinMemberPath } from '../lib/members';
 import { usePersonaId, usePersonaState } from '../lib/usePersonaState';
 import { useMediaQuery, useMobile } from '../lib/useMobile';
 import { useCanManage } from '../stores/access';
-import { featureOn, useAuth } from '../stores/auth';
+import { featureOn, useAuth, usePersonaEdition } from '../stores/auth';
 import { SHEET_WIDTH, useChatLayout } from '../stores/chatLayout';
 import { usePersonas } from '../stores/personas';
 import { useStatus } from '../stores/status';
@@ -64,6 +64,8 @@ const PEOPLE_SHOWN = 5;
  */
 export function Chat() {
   const personaId = usePersonaId();
+  // The persona edition's chat wears 素体: the twin's core over the conversation, its words in the voice face.
+  const look = usePersonaEdition() ? 'sutai' : undefined;
   const { pathname, state, key } = useLocation();
   const [params, setParams] = useSearchParams();
   const active = pathname === '/chat';
@@ -546,6 +548,7 @@ export function Chat() {
       className="chat-page chat-redesign"
       data-sheet={sheetOpen}
       data-empty={empty}
+      data-look={look}
     >
       <audio ref={audio.audioRef} preload="auto" className="hidden" />
       {sheetOpen && (
@@ -650,6 +653,7 @@ export function Chat() {
               trial={
                 assistant ? { on: trialOn, onChange: setTrialOn } : undefined
               }
+              look={look}
             />
           )}
           {mode === 'chat' && stageOpen && (

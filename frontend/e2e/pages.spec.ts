@@ -474,7 +474,34 @@ const pages: {
     ready: '全部录音（',
     setup: (page) =>
       page.addInitScript(() => localStorage.setItem('twin:theme', 'ink')),
-  },
+  }, // The persona edition's chat in 素体: the core over an empty chat, then a band over the conversation. Reduced
+  // motion holds the core on one frame so the shot is the same every time.
+  ...(
+    [
+      ['chat-persona', '我会先把发布时间定在下周二', 'c-plan'],
+      ['chat-persona-empty', '和林舟聊聊', ''],
+    ] as const
+  ).map(([name, ready, conversation]) => ({
+    name,
+    path: '/#/chat',
+    ready,
+    setup: async (page: Page) => {
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      await page.route('**/api/whoami', (route) =>
+        route.fulfill({
+          json: {
+            email: null,
+            admin: true,
+            auth_enabled: false,
+            edition: 'persona',
+          },
+        }),
+      );
+      await page.addInitScript((opened) => {
+        if (opened) localStorage.setItem('twin.current.conversation', opened);
+      }, conversation);
+    },
+  })),
 ];
 
 for (const { name, path, ready, viewport, setup } of pages) {

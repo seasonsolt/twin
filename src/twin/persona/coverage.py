@@ -38,6 +38,7 @@ LIKELY_SOURCES: dict[str, tuple[SourceKind, ...]] = {
     "D7": (SourceKind.CHAT, SourceKind.INTERVIEW, SourceKind.DIARY),
     "D8": (SourceKind.CHAT, SourceKind.DOCUMENT, SourceKind.DIARY),
     "D9": (SourceKind.QUESTIONNAIRE, SourceKind.INTERVIEW),
+    "D10": (SourceKind.DIARY, SourceKind.INTERVIEW, SourceKind.CHAT),
 }
 
 LEVEL_LABELS = {0: "还不了解", 1: "提到过", 2: "了解一些", 3: "了解较多"}

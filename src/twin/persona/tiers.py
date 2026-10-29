@@ -27,8 +27,9 @@ TIER_LABELS: dict[Tier, str] = {COLLEAGUE: "同事能用", SELF: "只有本人�
 
 # Work views, abilities, speech and how the person deals with people are fair for a colleague to ask about; family,
 # health, daily habits, tastes and what is still on the person's mind are theirs. Hobbies and tastes (9.1, 9.5) are
-# not settled yet: they start private, and the person can open them item by item.
-_SELF_FACETS = frozenset({"1.3", "7.5", "8.3", "9.1", "9.2", "9.3", "9.4", "9.5"})
+# not settled yet: they start private, and the person can open them item by item. What the person hopes to leave,
+# how they meet death and loss, and where their worth and meaning lie (D10) are theirs alone.
+_SELF_FACETS = frozenset({"1.3", "7.5", "8.3", "9.1", "9.2", "9.3", "9.4", "9.5", "10.1", "10.2", "10.3", "10.4"})
 DEFAULT_TIERS: dict[str, Tier] = {f.facet_id: SELF if f.facet_id in _SELF_FACETS else COLLEAGUE for f in FACETS}
 
 

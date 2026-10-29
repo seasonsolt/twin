@@ -51,7 +51,7 @@ export const endpointId = (endpoint: string | MemoryNode) =>
   typeof endpoint === 'string' ? endpoint : endpoint.id;
 export const dimensionColorToken = (id: string) => {
   const number = Number(id.replace(/^D/, ''));
-  return `--graph-d${number >= 1 && number <= 9 ? number : 1}`;
+  return `--graph-d${number >= 1 && number <= 10 ? number : 1}`;
 };
 
 export function buildMemoryGraph(

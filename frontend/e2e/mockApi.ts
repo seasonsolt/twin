@@ -1270,6 +1270,7 @@ const dimensions = [
   ['D7', '和人相处', 2],
   ['D8', '最近在关注', 0],
   ['D9', '生活与喜好', 1],
+  ['D10', '存在与意义', 0],
 ] as const;
 
 const itemSummary = {
@@ -1348,6 +1349,7 @@ const facetLevels: [string, string, number][] = [
   ['8.2', '正在做的事', 0],
   ['9.1', '兴趣爱好', 0],
   ['9.2', '生活习惯与作息', 1],
+  ['10.1', '想留下什么', 0],
 ];
 
 // Facets at the third level whose answers held up when the twin was asked about them.
@@ -1366,7 +1368,9 @@ const coverage = {
   checked_label: '回答经过检查',
   kind_labels: { chat: '聊天', document: '文档', interview: '访谈' },
   dimensions: dimensions.map(([dimension_id, name]) => {
-    const own = facetLevels.filter(([id]) => `D${id[0]}` === dimension_id);
+    const own = facetLevels.filter(
+      ([id]) => `D${id.split('.')[0]}` === dimension_id,
+    );
     return {
       dimension_id,
       name,
@@ -1381,7 +1385,7 @@ const coverage = {
   facets: facetLevels.map(([facet_id, name, level]) => ({
     facet_id,
     name,
-    dimension_id: `D${facet_id[0]}`,
+    dimension_id: `D${facet_id.split('.')[0]}`,
     consented: true,
     level,
     checked: checkedFacets.has(facet_id),

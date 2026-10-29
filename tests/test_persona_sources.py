@@ -41,9 +41,9 @@ def settings() -> Settings:
     return Settings(target_name="张三", target_aliases=["老张"], pseudonymize_others=False)
 
 
-def test_taxonomy_has_nine_dimensions_and_39_unique_facets() -> None:
-    assert TAXONOMY_VERSION == "v2" and len(DIMENSIONS) == 9 and len(FACETS) == 39
-    assert len(FACET_BY_ID) == 39
+def test_taxonomy_has_ten_dimensions_and_43_unique_facets() -> None:
+    assert TAXONOMY_VERSION == "v3" and len(DIMENSIONS) == 10 and len(FACETS) == 43
+    assert len(FACET_BY_ID) == 43
     assert all(facets_of(d.dimension_id) for d in DIMENSIONS)
     # v2: life and preferences (D9) no longer wait for questionnaire consent.
     assert not any(requires_consent(f.facet_id) for f in FACETS)

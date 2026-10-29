@@ -281,3 +281,41 @@ def test_consent_extracts_or_forgets_only_the_facets_it_changes(tmp_path: Path) 
         assert not [call for call in llm.calls if call[0] == "ExtractDraft"]
         assert {c.facet_id for c in store.list_candidates()} == {"2.1"}
         assert {i.facet_id for i in store.list_items()} == {"2.1"}
+
+
+def _meaning_handler(system: str, user: str, schema: type) -> dict[str, object]:
+    if schema is profile.ExtractDraft and "留下" in user and "10.1 " in system:
+        found = re.findall(r"\[(\d+)\][^\n]*\n本人：([^\n]*留下[^\n]*)", user)
+        return {
+            "items": [{"facet_id": "10.1", "statement": t, "quotes": [{"n": int(n), "quote": t}]} for n, t in found]
+        }
+    return _life_handler(system, user, schema)
+
+
+def test_adding_existence_and_meaning_extracts_only_its_facets(tmp_path: Path) -> None:
+    """v3 adds D10 and moves nothing: a store built on v2 extracts the stored chunks again for the four new facets
+    alone, keeps every item it had, and the new items are the person's own."""
+    settings = Settings(db_path=tmp_path / "twin.db", target_name="本人")
+    with PersonaStore(settings.db_path) as store:
+        store.put_source(parse_note("我做事先看回款。\n\n我想给孩子留下一个书房。", settings))
+        profile.build_profile(store, FakeLLM(_life_handler), settings)
+        before = {i.item_id: i for i in store.list_items()}
+    v2 = TAXONOMY_FACET_IDS["v2"]
+    with sqlite3.connect(settings.db_path) as db:
+        db.execute("UPDATE p_chunks SET facets = ?", (json.dumps(sorted(v2)),))
+        db.execute("INSERT OR REPLACE INTO p_meta VALUES (?, 'v2')", (storage.TAXONOMY_META,))
+        db.execute(
+            "INSERT OR REPLACE INTO p_meta VALUES ('kernel:built', ?)", (kernel_json(replace(KERNEL, taxonomy="v2")),)
+        )
+    with PersonaStore(settings.db_path) as store:
+        assert kernel.rebuild_scope(store.kernel_built(), KERNEL) == "merge"
+        assert profile.pending_chunks(store, settings) == 1
+        llm = FakeLLM(_meaning_handler)
+        profile.build_profile(store, llm, settings)
+        [(_, system, _)] = [call for call in llm.calls if call[0] == "ExtractDraft"]
+        assert set(re.findall(r"^  (\d+\.\d+) ", system, re.M)) == {"10.1", "10.2", "10.3", "10.4"}
+        items = store.list_items()
+        assert {i.item_id: i for i in items if i.facet_id != "10.1"} == before
+        [kept] = [i for i in items if i.facet_id == "10.1"]
+        assert "书房" in kept.statement and store.item_tiers().get(kept.item_id, "self") == "self"
+        assert profile.pending_chunks(store, settings) == 0

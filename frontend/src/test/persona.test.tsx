@@ -276,7 +276,7 @@ function dimensionItems(
   }));
 }
 
-it('lays out all nine aspects in three layers, counts non-rejected items, and opens the first known one', async () => {
+it('lays out all ten aspects in three layers, counts non-rejected items, and opens the first known one', async () => {
   rows = [
     ...dimensionItems('D1', 2, 'confirmed'),
     ...dimensionItems('D2', 7),
@@ -292,6 +292,7 @@ it('lays out all nine aspects in three layers, counts non-rejected items, and op
       .map((row) => row.textContent?.replace(/[\s\d]+$/, '')),
   ).toEqual([
     '看重什么',
+    '存在与意义',
     '怎么思考',
     '怎么做决定',
     '说话方式',
@@ -305,11 +306,11 @@ it('lays out all nine aspects in three layers, counts non-rejected items, and op
   expect(screen.getByRole('tab', { name: /^怎么做决定 1/u })).toBeVisible();
   expect(screen.getByRole('tab', { name: /^生活与喜好/u })).toBeVisible();
   expect(
-    screen.getByRole('img', { name: '九个方面里已了解 3 个' }),
+    screen.getByRole('img', { name: '十个方面里已了解 3 个' }),
   ).toBeVisible();
   // The count is on the 记忆 tab already: the overview does not say it again, nor how memories are used.
   expect(screen.queryByText(/条记忆/u)).toBeNull();
-  expect(screen.getByRole('tablist', { name: '九个方面' })).toHaveClass(
+  expect(screen.getByRole('tablist', { name: '十个方面' })).toHaveClass(
     'overflow-x-auto',
   );
   const user = userEvent.setup();
@@ -506,17 +507,17 @@ it.each([
           removeEventListener: vi.fn(),
         }) as unknown as MediaQueryList,
     );
-    rows = [...dimensionItems('D2', 2), ...dimensionItems('D4', 1)];
+    rows = [...dimensionItems('D2', 2), ...dimensionItems('D10', 1)];
     mountOverview();
     const user = userEvent.setup();
     const first = await screen.findByRole('tab', { name: /^看重什么 2/u });
-    expect(screen.getByRole('tablist', { name: '九个方面' })).toHaveAttribute(
+    expect(screen.getByRole('tablist', { name: '十个方面' })).toHaveAttribute(
       'aria-orientation',
       orientation,
     );
     first.focus();
     await user.keyboard(`{${key}}`);
-    expect(screen.getByRole('tab', { name: /^怎么思考 1/u })).toHaveAttribute(
+    expect(screen.getByRole('tab', { name: /^存在与意义 1/u })).toHaveAttribute(
       'aria-selected',
       'true',
     );

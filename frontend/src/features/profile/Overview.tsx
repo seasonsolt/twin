@@ -42,6 +42,7 @@ export const topics: Record<string, string> = {
   D7: '和人相处',
   D8: '最近在关注',
   D9: '生活与喜好',
+  D10: '存在与意义',
 };
 /** What each aspect covers, in a line, so an empty one still says what it is waiting to learn. */
 const blurbs: Record<string, string> = {
@@ -54,14 +55,17 @@ const blurbs: Record<string, string> = {
   D7: '怎么和人相处、帮助别人、一起做事和处理分歧',
   D8: '这段时间的重点、正在做的事和还没想清楚的问题',
   D9: '兴趣爱好、作息习惯、家庭和各种偏好',
+  D10: '想留下什么，怎样面对失去，价值和意义寄托在哪里',
 };
-/** The nine aspects in reading order: who they are inside, how that shows, and the life around them. */
+/** The ten aspects in reading order: who they are inside (and what it means to them), how that shows, and the life
+ * around them. */
 const layers: { label: string; layer: AspectLayer; ids: string[] }[] = [
-  { label: '内核', layer: 'core', ids: ['D2', 'D4', 'D3'] },
+  { label: '内核', layer: 'core', ids: ['D2', 'D10', 'D4', 'D3'] },
   { label: '外显', layer: 'outer', ids: ['D6', 'D7', 'D5'] },
   { label: '处境', layer: 'context', ids: ['D1', 'D8', 'D9'] },
 ];
 const order = layers.flatMap((group) => group.ids);
+const ASPECTS = '十个方面';
 const layerOf = (id: string) =>
   layers.find((group) => group.ids.includes(id))?.layer ?? 'core';
 // How well something is known, in words: the four levels the server counts, each more than the last. A facet whose
@@ -451,14 +455,14 @@ export function Overview({ ask }: { ask?: AskPerson }) {
         {profile.summary && (
           <Toolbar stackOnMobile gap={6}>
             <AspectRing
-              label={`九个方面里已了解 ${known} 个`}
+              label={`${ASPECTS}里已了解 ${known} 个`}
               segments={aspects.map((aspect) => ({
                 layer: layerOf(aspect.id),
                 level: aspect.level,
               }))}
             >
               <Text size="xl" weight="semibold">
-                {known}/9
+                {known}/{aspects.length}
               </Text>
               <Text size="xs" tone="secondary">
                 个方面
@@ -524,9 +528,9 @@ export function Overview({ ask }: { ask?: AskPerson }) {
         )}
       </Card>
       {profile.summary && !empty && (
-        <Card padding="roomy" aria-label="九个方面" className="space-y-4">
+        <Card padding="roomy" aria-label={ASPECTS} className="space-y-4">
           <Toolbar stackOnMobile>
-            <Heading level={3}>九个方面</Heading>
+            <Heading level={3}>{ASPECTS}</Heading>
             <Row gap={2}>
               <Input
                 type="search"
@@ -561,7 +565,7 @@ export function Overview({ ask }: { ask?: AskPerson }) {
             </section>
           ) : (
             <SideTabs
-              label="九个方面"
+              label={ASPECTS}
               value={selected}
               onValueChange={setChosen}
               groups={layers.map((group) => ({

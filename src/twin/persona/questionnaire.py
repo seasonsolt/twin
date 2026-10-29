@@ -41,7 +41,7 @@ def _q(n: int, section: str, text: str, facets: str, kind: QuestionKind = "open"
     return Question(n, section, text, kind, tuple(facets.split()))
 
 
-S1, S2, S3, S4, S5, S6, S7, S8, S9 = (
+S1, S2, S3, S4, S5, S6, S7, S8, S9, S10 = (
     "经历与身份",
     "看重什么",
     "怎么做决定",
@@ -51,6 +51,7 @@ S1, S2, S3, S4, S5, S6, S7, S8, S9 = (
     "和人相处",
     "最近在关注",
     "生活与喜好",
+    "存在与意义",
 )
 
 QUESTIONS: tuple[Question, ...] = (
@@ -74,6 +75,10 @@ QUESTIONS: tuple[Question, ...] = (
     _q(18, S8, "最近有什么想尝试的事，或者还没想清楚的问题？", "8.3"),
     _q(19, S9, "有空时你喜欢做什么？最近喜欢的书、音乐、食物或地方是什么？", "9.1 9.5"),
     _q(20, S9, "你平时怎样安排休息、运动和日常生活？家里有没有你愿意分享的事？", "9.2 9.3 9.4"),
+    # Added after the first twenty, so answers already given stay under their own questions.
+    _q(21, S10, "有什么你希望在自己之后还留下来？可以是做过的事、作品、孩子，或者一个信念。", "10.1"),
+    _q(22, S10, "什么时候你会觉得自己有价值？你最在意谁的认可？", "10.3 10.4"),
+    _q(23, S10, "经历过离别或失去吗？当时你是怎么过来的，现在怎么看？", "10.2"),
 )
 
 

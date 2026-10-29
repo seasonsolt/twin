@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 PROMPT_VERSION = "persona-v7"
-TAXONOMY_VERSION = "v2"
+TAXONOMY_VERSION = "v3"
 
 # Content fingerprints of each released version. Changing the extraction prompts or the taxonomy without bumping
 # the version would leave every existing store on stale extractions with no rebuild, so tests pin these: a change
@@ -22,6 +22,7 @@ PROMPT_FINGERPRINTS = {
 TAXONOMY_FINGERPRINTS = {
     "v1": "709b4a45adf588753f44a56e67780c93d76cb5f41f48caf89e991c20c77c5624",
     "v2": "953fbda71005252b1746adb953d5693bf9480a38d383f4ee7e40373a3f48563f",
+    "v3": "43985bba10099e09d73950da892d1e988c34205e84ab8b8f334af8cc283c2f74",
 }
 
 
@@ -41,12 +42,15 @@ _FACETS_V1 = (
 TAXONOMY_FACET_IDS: dict[str, tuple[str, ...]] = {
     "v1": _FACETS_V1,
     "v2": _FACETS_V1,
+    "v3": (*_FACETS_V1, "10.1", "10.2", "10.3", "10.4"),
 }
 # For each version after the first: where the previous version's facet ids go. An id that stays need not be listed.
 # A tuple names its new facets: the first holds the old items until the rebuild re-merges them, and the others inherit
 # the person's reviews of those items at that re-merge. An empty tuple removes the facet and its items.
 TAXONOMY_MIGRATIONS: dict[str, dict[str, tuple[str, ...]]] = {
     "v2": {},
+    # Adds D10 存在与意义; no facet moves.
+    "v3": {},
 }
 
 

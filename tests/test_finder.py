@@ -140,7 +140,7 @@ def test_the_cache_of_what_each_twin_knows_is_kept_in_the_team_database_and_can_
         assert [(r.facet_id, r.level, r.occasions, r.last_seen) for r in rows] == [("5.2", 2, 3, "2026-09-03")]
         assert refresh_coverage(team, "wang", store) == 1
     [row] = team.coverage()
-    assert (row.persona_id, row.facet_id, row.level, row.kernel) == ("wang", "5.2", 2, "persona-v7/v2")
+    assert (row.persona_id, row.facet_id, row.level, row.kernel) == ("wang", "5.2", 2, "persona-v7/v3")
     # The cache is only a cache: dropped, the next question makes it again.
     team.forget_coverage()
     assert team.coverage() == []

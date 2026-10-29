@@ -46,6 +46,7 @@
   --graph-d7: #b995c2;
   --graph-d8: #c5bc80;
   --graph-d9: #df947f;
+  --graph-d10: #a9a3cf;
 }
 
 /* Themes: 朱砂红 above is the default; <html data-theme> picks another (stores/theme.ts). */
@@ -112,6 +113,7 @@
   --graph-d7: #cba9d3;
   --graph-d8: #d4ca91;
   --graph-d9: #efa992;
+  --graph-d10: #bcb6e0;
 }
 
 @theme inline {

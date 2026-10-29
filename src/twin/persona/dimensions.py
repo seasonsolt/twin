@@ -1,4 +1,4 @@
-"""The persona dimension taxonomy (docs/PERSONA_DIMENSIONS.md): 9 dimensions, 39 facets.
+"""The persona dimension taxonomy (docs/PERSONA_DIMENSIONS.md): 10 dimensions, 43 facets.
 
 A facet is the smallest unit completeness is computed on; every persona item carries one facet id. The taxonomy is
 versioned: a change bumps ``TAXONOMY_VERSION`` so earlier completeness reports stay reproducible.
@@ -42,6 +42,7 @@ DIMENSIONS: tuple[Dimension, ...] = (
     Dimension("D7", "和人相处", "medium"),
     Dimension("D8", "最近在关注", "fast"),
     Dimension("D9", "生活与喜好", "slow"),
+    Dimension("D10", "存在与意义", "slow"),
 )
 
 FACETS: tuple[Facet, ...] = (
@@ -84,6 +85,12 @@ FACETS: tuple[Facet, ...] = (
     Facet("9.3", "D9", "家庭", "本人愿意公开的家庭情况"),
     Facet("9.4", "D9", "健康与运动", "运动习惯和健康相关的情况"),
     Facet("9.5", "D9", "品味偏好", "饮食、阅读、音乐等偏好"),
+    # What the person said and did about what outlasts them, not an interpretation of it
+    # (docs/PRODUCT_PERSONA_AGENT.md).
+    Facet("10.1", "D10", "想留下什么", "反复投入、希望在自己之后还留下来的事业、作品、子女或信念"),
+    Facet("10.2", "D10", "怎样看待死亡与失去", "谈到衰老、死亡、离别和失去时怎么说、怎么做，以及避开不谈的时候"),
+    Facet("10.3", "D10", "价值感从哪里来", "让他觉得自己有价值的事：自豪的时刻、在意的认可"),
+    Facet("10.4", "D10", "把意义寄托在谁身上", "反复提到、依靠、希望得到其认可的人或群体"),
 )
 
 DIMENSION_BY_ID: dict[str, Dimension] = {d.dimension_id: d for d in DIMENSIONS}

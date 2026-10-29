@@ -13,8 +13,8 @@ def settings() -> Settings:
     return Settings(target_name="张三")
 
 
-def test_question_bank_is_optional_and_covers_nine_topics() -> None:
-    assert len(pq.QUESTIONS) == 20 and len({q.qid for q in pq.QUESTIONS}) == 20
+def test_question_bank_is_optional_and_covers_every_topic() -> None:
+    assert len(pq.QUESTIONS) == 23 and len({q.qid for q in pq.QUESTIONS}) == 23
     assert {f for q in pq.QUESTIONS for f in q.facets} == {f.facet_id for f in FACETS}
     assert all(f in FACET_BY_ID for q in pq.QUESTIONS for f in q.facets)
     assert {q.section for q in pq.QUESTIONS} == {
@@ -27,6 +27,7 @@ def test_question_bank_is_optional_and_covers_nine_topics() -> None:
         "和人相处",
         "最近在关注",
         "生活与喜好",
+        "存在与意义",
     }
     assert all(q.optional for q in pq.QUESTIONS)
     assert not any(word in q.text for q in pq.QUESTIONS for word in ("汇报", "下属", "预算", "考核", "授权", "投不投"))
@@ -73,3 +74,12 @@ def test_old_draft_answers_are_not_shown_under_new_questions() -> None:
         state = pq.load_round(store, "initial")
         assert state.answers == {} and state.version == pq.QUESTIONNAIRE_VERSION
         assert state.source_id == "old-source"
+
+
+def test_answers_to_two_digit_facets_stay_their_own(settings: Settings) -> None:
+    with PersonaStore(":memory:") as store:
+        parsed = pq.submit_initial(store, settings, {"q20": "六点起", "q21": "给孩子留一个书房"})
+    assert [(e.text, e.facets_hint) for e in parsed.expressions] == [
+        ("六点起", ["9.2", "9.3", "9.4"]),
+        ("给孩子留一个书房", ["10.1"]),
+    ]

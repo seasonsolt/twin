@@ -179,7 +179,7 @@ def test_questionnaire_page(tmp_path: Path) -> None:
     browser = make_browser(make_settings(tmp_path), persona_handler)
     headers = {**ACCEPT, "X-Twin": "1"}
     empty = browser.get("/api/persona/questionnaire", {"round": "initial"})
-    assert empty["status"] == "empty" and len(empty["questions"]) == 20
+    assert empty["status"] == "empty" and len(empty["questions"]) == 23
 
     draft = browser.client.put(
         "/api/persona/questionnaire/draft",

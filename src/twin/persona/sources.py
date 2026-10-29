@@ -642,7 +642,7 @@ def parse_diary(path_name: str, raw: str, settings: Settings, date: dt.date | No
 # ---------------------------------------------------------------- questionnaire
 
 _QUESTION = re.compile(r"^\s*(?:\*\*)?\s*(?P<n>\d{1,3})\s*[.、．]\s*(?P<body>.+)$")
-_TAGS = re.compile(r"(?P<type>[一-龥]{2})\s*·\s*(?P<facets>\d\.\d(?:\s+\d\.\d)*)\s*\*?\s*$")
+_TAGS = re.compile(r"(?P<type>[一-龥]{2})\s*·\s*(?P<facets>\d{1,2}\.\d(?:\s+\d{1,2}\.\d)*)\s*\*?\s*$")
 _ANSWER = re.compile(r"^\s*回答\s*[：:]\s*(?P<text>.*)$")
 _MARKUP = re.compile(r"[*_`]")
 

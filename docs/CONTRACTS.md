@@ -90,7 +90,7 @@ Positioning: Identity → Memory upload → Service. Repository, project, Python
 ```python
 def expression_view(store: PersonaStore, settings: Settings, *, source_id: str | None = None,
                     target_only: bool = False, until: date | None = None,
-                    expressions: list[Expression] | None = None) -> list[Expression]
+                    expressions: list[Expression] | None = None, mirror: bool = False) -> list[Expression]
 ```
 
 - The four converters (chat, interview, document, questionnaire) store original expression text and speaker names,
@@ -116,6 +116,15 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
   no embedding call. CLI and web builds pass their active settings. A third namespace, `others`, embeds what other
   speakers said to the person (`others_view`: their messages in the same view, from ready sources) so the twin can
   recall what it was told; chat shows these as others' words and never as the person's own.
+- **Diary and the mirror（P1.1）**：`SourceKind.DIARY`（日记）由 `parse_diary` 读入：日期开头、后面至多几个字的行
+  是一天的标题（可带 Markdown `#`），之后每段落都是本人的、带这一天的日期；日期后面是一句话（超过 12 个字或带标点）时，
+  这句是当天的第一段。第一天之前单独一行的短标题不算条目。`detect_kind` 在聊天、访谈之后、文档之前识别：
+  至少 `MIN_DIARY_DAYS`（2）个不同日期的标题。证据类别同文档（行为）。
+  `Expression.mirror: Literal["", "dream"] = ""` 是附加的 JSON 字段：标题里单独写着“梦”的一天，或以“梦：”“【梦】”
+  开头的段落或行，记为 `"dream"`。`ExpressionView.select` 默认去掉 mirror 条目，所以记忆抽取、向量索引、聊天检索和
+  服务接口都不会读到梦；只有显式传 `mirror=True` 的地方（资料原文 `GET /api/persona/sources/{id}/text`，梦前加 `DREAM_MARK`“【梦 · 不进记忆】”；以后的镜子层）能看到。
+  schema 8（`p_sources_kind` 索引）随之加入：更早的版本遇到日记会拒绝打开数据库（`NewerStoreError`），而不是读行时报错；
+  升级前自动快照。
 - Profile chunks contain the view both as rendered prompt text and as verification entries: evidence quotes are
   verified against exactly the view sent to the extractor, not against raw L1. Chunk hashes remain content-based;
   a changed privacy setting or known-name catalog invalidates affected chunks on the next build without changing

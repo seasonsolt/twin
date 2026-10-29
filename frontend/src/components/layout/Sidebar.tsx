@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import {
   BookUser,
+  FileText,
   Inbox,
   ListChecks,
   LogOut,
@@ -109,6 +110,9 @@ export function Sidebar() {
   const teamName = useTeamName();
   const location = useLocation();
   const [finding, setFinding] = useState(false);
+  const onTwin = location.pathname.startsWith('/team/');
+  const onSources =
+    new URLSearchParams(location.search).get('section') === 'memories';
   const library = useTeam((state) => state.library);
   const people = useTeam((state) => state.people);
   const review = useTeam((state) => state.review);
@@ -216,11 +220,18 @@ export function Sidebar() {
     : persona
       ? [
           { to: '/chat', title: '对话', icon: MessageCircle },
+          // Both are tabs of the twin's own page: what it knows of the person, and what it was given.
           {
-            to: '/memories',
+            to: '/profile',
             title: '记忆',
             icon: BookUser,
-            active: location.pathname.startsWith('/team/'),
+            active: onTwin && !onSources,
+          },
+          {
+            to: '/memories',
+            title: '资料',
+            icon: FileText,
+            active: onTwin && onSources,
           },
         ]
       : [{ to: '/chat', title: '对话', icon: MessageCircle }];

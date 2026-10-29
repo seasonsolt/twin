@@ -29,14 +29,14 @@ FAST_DIMENSIONS = frozenset({"D8"})
 
 # Where each dimension's evidence most likely comes from, best first.
 LIKELY_SOURCES: dict[str, tuple[SourceKind, ...]] = {
-    "D1": (SourceKind.QUESTIONNAIRE, SourceKind.INTERVIEW, SourceKind.DOCUMENT),
+    "D1": (SourceKind.QUESTIONNAIRE, SourceKind.INTERVIEW, SourceKind.DOCUMENT, SourceKind.DIARY),
     "D2": (SourceKind.CHAT, SourceKind.INTERVIEW, SourceKind.QUESTIONNAIRE),
     "D3": (SourceKind.CHAT, SourceKind.DOCUMENT, SourceKind.INTERVIEW),
     "D4": (SourceKind.CHAT, SourceKind.DOCUMENT),
     "D5": (SourceKind.DOCUMENT, SourceKind.CHAT),
     "D6": (SourceKind.CHAT, SourceKind.DOCUMENT),
-    "D7": (SourceKind.CHAT, SourceKind.INTERVIEW),
-    "D8": (SourceKind.CHAT, SourceKind.DOCUMENT),
+    "D7": (SourceKind.CHAT, SourceKind.INTERVIEW, SourceKind.DIARY),
+    "D8": (SourceKind.CHAT, SourceKind.DOCUMENT, SourceKind.DIARY),
     "D9": (SourceKind.QUESTIONNAIRE, SourceKind.INTERVIEW),
 }
 

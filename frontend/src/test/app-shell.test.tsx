@@ -176,11 +176,17 @@ it('keeps only name/AI label in the header and describes external hosts only on 
     const nav = screen.getByRole('navigation', { name: '主导航' });
     expect(
       [...nav.querySelectorAll('a')].map((link) => link.textContent),
-    ).toEqual(['对话', '记忆']);
+    ).toEqual(['对话', '记忆', '资料']);
+    // This page is the twin's 记忆 (its 档案 tab): that entry is current, not 资料 (its sources).
     expect(within(nav).getByRole('link', { name: '记忆' })).toHaveAttribute(
       'aria-current',
       'page',
     );
+    expect(within(nav).getByRole('link', { name: '资料' })).not.toHaveAttribute(
+      'aria-current',
+    );
+    expect(screen.getByRole('tab', { name: '记忆' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /^资料/u })).toBeInTheDocument();
     expect(screen.getByText('我的分身')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /问一句、找人/u })).toBeNull();
   } finally {

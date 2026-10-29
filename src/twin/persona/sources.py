@@ -99,10 +99,11 @@ def expression_view(
     target_only: bool = False,
     until: dt.date | None = None,
     expressions: list[Expression] | None = None,
+    mirror: bool = False,
 ) -> list[Expression]:
     """The L2/L3 view, never written back to L1 (see ``ExpressionView``)."""
     return ExpressionView(store, settings).select(
-        source_id=source_id, target_only=target_only, until=until, expressions=expressions
+        source_id=source_id, target_only=target_only, until=until, expressions=expressions, mirror=mirror
     )
 
 
@@ -164,14 +165,17 @@ class ExpressionView:
         target_only: bool = False,
         until: dt.date | None = None,
         expressions: list[Expression] | None = None,
+        mirror: bool = False,
     ) -> list[Expression]:
         """The corpus (or ``expressions``) in the view, narrowed to one source, the person's own words (from sources
-        that are ready) and what was said up to ``until``."""
+        that are ready) and what was said up to ``until``. What is kept for the mirror only (dreams) is left out
+        unless ``mirror``: memories are never extracted from it, and chat never answers from it."""
         sources = self.sources
         entries = [
             e
             for e in (self.corpus if expressions is None else expressions)
-            if (source_id is None or e.source_id == source_id)
+            if (mirror or not e.mirror)
+            and (source_id is None or e.source_id == source_id)
             and (not target_only or (e.is_target and sources[e.source_id].media_status in (None, "ready")))
             and (until is None or (e.date is not None and e.date <= until))
         ]
@@ -543,6 +547,98 @@ def parse_document(path_name: str, raw: str, settings: Settings, date: dt.date |
     return _paragraphs(SourceKind.DOCUMENT, path_name, raw, settings, date)
 
 
+# ---------------------------------------------------------------- diary
+
+# A day's heading: the date opening a line, as a Markdown heading or not, with at most a few words after it (the
+# weekday, the weather). 梦 among them marks the whole day as a dream; a paragraph of a day opening with 梦： or 【梦】
+# is one. Words after the date that read as a sentence are the day's first words, not its heading.
+_DIARY_HEADING = re.compile(rf"^\s*(?:#{{1,6}}\s*)?(?P<date>{_DATE})(?P<rest>.*)$")
+_HEADING_WORDS = 12
+_SENTENCE = re.compile(r"[，。！？；,.!?;]")
+_DREAM_WORD = re.compile(r"(?:^|[\s·,，、(（\[【])梦(?:$|[\s·,，、)）\]】])")
+_DREAM_PARAGRAPH = re.compile(r"^(?:【梦】|\[梦\]|梦\s*[：:])\s*")
+# Days a text must open under before it is read as a diary.
+MIN_DIARY_DAYS = 2
+
+
+def _diary_day(line: str) -> tuple[dt.date, str, bool, str] | None:
+    """The day a line opens: the date, the heading as written (without Markdown), whether the day is a dream, and the
+    words after the date when they are the day's first words rather than its heading."""
+    m = _DIARY_HEADING.match(line)
+    if m is None or (day := _date(m["y"], m["m"], m["d"])) is None:
+        return None
+    rest = m["rest"].strip()
+    words = rest.lstrip(" -—–:：·|").strip()
+    if len(words) > _HEADING_WORDS or _SENTENCE.search(words):
+        return day, m["date"], False, words
+    return day, line.strip().lstrip("#").strip(), bool(_DREAM_WORD.search(rest)), ""
+
+
+def is_diary(text: str) -> bool:
+    """Whether ``text`` is written day by day: at least ``MIN_DIARY_DAYS`` different days under their own headings."""
+    days = {found[0] for line in text.splitlines() if (found := _diary_day(line)) is not None}
+    return len(days) >= MIN_DIARY_DAYS
+
+
+def parse_diary(path_name: str, raw: str, settings: Settings, date: dt.date | None = None) -> ParsedSource:
+    """Entries the person wrote, each day under its date heading: every paragraph is theirs and dated by the heading
+    above it (``date`` for what comes before the first one). Other Markdown headings name the paragraphs under them,
+    after the day's. A dream (a day whose heading says 梦, or a paragraph or line opening with 梦： or 【梦】) is kept
+    for the mirror only. A short line alone before the first day is the diary's title, not an entry."""
+    title = Path(path_name).stem
+    source_id = source_id_for(SourceKind.DIARY, path_name, raw)
+    expressions: list[Expression] = []
+    day, heading, dreaming = date, title, False
+    started = False
+    section = ""
+    block: list[str] = []
+
+    def flush() -> None:
+        text = "\n".join(block).strip()
+        block.clear()
+        if not text:
+            return
+        if not started and not expressions and "\n" not in text and len(text) <= 20 and not _SENTENCE.search(text):
+            return
+        dream = dreaming or bool(_DREAM_PARAGRAPH.match(text))
+        text = _DREAM_PARAGRAPH.sub("", text, count=1).strip() or text
+        i = len(expressions)
+        expressions.append(
+            Expression(
+                expression_id=f"{source_id}#{i:05d}",
+                source_id=source_id,
+                idx=i,
+                date=day,
+                speaker=settings.target_name,
+                is_target=True,
+                text=text,
+                channel=f"{heading} · {section}" if section else heading,
+                mirror="dream" if dream else "",
+            )
+        )
+
+    for line in raw.splitlines():
+        if (found := _diary_day(line)) is not None:
+            flush()
+            day, heading, dreaming, first = found
+            started = True
+            section = ""
+            if first:
+                block.append(first)
+        elif m := re.match(r"^\s*#{1,6}\s+(.+)$", line):
+            flush()
+            section = m[1].strip()
+        elif not line.strip():
+            flush()
+        elif _DREAM_PARAGRAPH.match(line.strip()):
+            flush()
+            block.append(line.strip())
+        else:
+            block.append(line)
+    flush()
+    return ParsedSource(_source(SourceKind.DIARY, title, path_name, source_id, expressions), expressions)
+
+
 # ---------------------------------------------------------------- questionnaire
 
 _QUESTION = re.compile(r"^\s*(?:\*\*)?\s*(?P<n>\d{1,3})\s*[.、．]\s*(?P<body>.+)$")
@@ -658,6 +754,8 @@ def parse_text(kind: SourceKind, name: str, raw: str, settings: Settings, date: 
         return _paragraphs(kind, name, raw, settings, date)
     if kind is SourceKind.DOCUMENT:
         return parse_document(name, raw, settings, date)
+    if kind is SourceKind.DIARY:
+        return parse_diary(name, raw, settings, date)
     return parse_questionnaire(name, raw, settings, date)
 
 
@@ -668,6 +766,7 @@ MEMORY_KIND_LABELS = {
     SourceKind.INTERVIEW: "访谈",
     SourceKind.VIDEO: "视频",
     SourceKind.AUDIO: "音频",
+    SourceKind.DIARY: "日记",
 }
 
 
@@ -704,6 +803,8 @@ def detect_kind(name: str, text: str, settings: Settings | None = None) -> Sourc
     # first).
     if any(_PLAIN.match(line) for line in lines[:2]) and len(set(speakers)) >= 2 and _talking(speakers, settings):
         return SourceKind.INTERVIEW
+    if is_diary(text):
+        return SourceKind.DIARY
     return SourceKind.DOCUMENT
 
 

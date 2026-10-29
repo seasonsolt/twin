@@ -103,6 +103,8 @@ MAX_PAGE_SIZE = 500
 # Search shows the closest items, best first: enough to find the wrong one, short enough to read.
 SEARCH_SIZE = 20
 MEDIA_PENDING = frozenset({"queued", "extracting", "transcribing"})
+# Put before a dream in the source's own text: kept for the mirror, never read into memories or answered from.
+DREAM_MARK = "【梦 · 不进记忆】"
 # Sources the memory page lists apart from the paged list: work in progress and work waiting for the person.
 NEEDS_ATTENTION = MEDIA_PENDING | {"failed", "needs_asr", "needs_speaker"}
 MAX_ATTENTION = 50
@@ -753,10 +755,12 @@ def register(
             # A note the person kept to themself is not for those who manage the twin either.
             if source is None or (request_audience(request) != SELF and source_id in store.private_note_sources()):
                 raise HTTPException(404, "找不到这条记忆")
-            expressions = expression_view(store, settings, source_id=source_id)
+            # The person's own text as written, dreams included and marked: the twin does not read them.
+            expressions = expression_view(store, settings, source_id=source_id, mirror=True)
             speaker_lines = source.kind in {SourceKind.CHAT, SourceKind.INTERVIEW, SourceKind.AUDIO, SourceKind.VIDEO}
             return "\n\n".join(
                 (f"{e.context}\n" if e.context and not source.media_sha else "")
+                + (DREAM_MARK if e.mirror == "dream" else "")
                 + (f"{e.speaker}：{e.text}" if speaker_lines else e.text)
                 for e in expressions
             )[:20000]

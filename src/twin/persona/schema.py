@@ -17,6 +17,8 @@ class SourceKind(StrEnum):
     DOCUMENT = "document"
     VIDEO = "video"
     AUDIO = "audio"
+    # Dated entries the person wrote, a day under each date heading (``sources.parse_diary``).
+    DIARY = "diary"
 
 
 def document_kind(value: object) -> object:
@@ -35,6 +37,7 @@ SOURCE_KIND_LABELS: dict[SourceKind, str] = {
     SourceKind.DOCUMENT: "文档与邮件",
     SourceKind.VIDEO: "视频",
     SourceKind.AUDIO: "音频",
+    SourceKind.DIARY: "日记",
 }
 
 _SELF_REPORT = frozenset({SourceKind.QUESTIONNAIRE, SourceKind.INTERVIEW})
@@ -60,6 +63,9 @@ class Expression(BaseModel):
     facets_hint: list[str] = Field(default_factory=list)
     # Preserve provenance on legacy third-party records without treating narration as the person's own words.
     narrated: bool = False
+    # Kept for the mirror only, never read into memories or used to answer: "dream" for a dream the person wrote
+    # down, since what happens in a dream did not happen to them. Only views that ask for it (``mirror=True``) see it.
+    mirror: Literal["", "dream"] = ""
 
 
 class Source(BaseModel):

@@ -43,6 +43,7 @@ def source_for(kind: SourceKind, settings: Settings) -> ParsedSource:
         SourceKind.VIDEO: f"# 李四的计划\n\n{WORDS}\n",
         SourceKind.AUDIO: f"# 李四的计划\n\n{WORDS}\n",
         SourceKind.QUESTIONNAIRE: f"**1. {QUESTION}**　*开放 · 3.3*\n\n回答：{WORDS}\n",
+        SourceKind.DIARY: f"## 2026-09-01 李四的计划\n{WORDS}\n",
     }[kind]
     return parse_text(kind, f"{kind}.md", raw, settings, DAY)
 

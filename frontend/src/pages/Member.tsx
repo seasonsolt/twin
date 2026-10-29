@@ -231,7 +231,8 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
             items={[
               {
                 value: 'overview',
-                label: '档案',
+                // The persona edition calls them as its side bar does: what the twin knows, and what it was given.
+                label: team ? '档案' : '记忆',
                 content: (
                   <Stack gap={4}>
                     <OverviewTab
@@ -254,7 +255,7 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
                 value: 'memories',
                 label: (
                   <Row gap={2} as="div">
-                    记忆
+                    {team ? '记忆' : '资料'}
                     {memories ? (
                       <Text as="span" size="sm" tone="inherit">
                         {memories}

@@ -101,6 +101,10 @@ _MIGRATIONS: tuple[str, ...] = (
     " ON conversation_turns(conversation_id, handoff_id) WHERE handoff_id IS NOT NULL;",
     # 7: a count of the writes to what chat retrieves from (``memory_revision``), from any connection.
     _REVISION,
+    # 8: sources of kinds older releases cannot read (``SourceKind.DIARY``) and expressions kept for the mirror only
+    # (``Expression.mirror``): a release before them refuses the database instead of failing on its rows, and the
+    # database is snapshotted before it changes. The index finds a twin's sources of one kind.
+    "CREATE INDEX IF NOT EXISTS p_sources_kind ON p_sources(kind);",
 )
 
 

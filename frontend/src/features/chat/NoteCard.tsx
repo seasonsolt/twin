@@ -9,6 +9,7 @@ import {
   Text,
   Tooltip,
 } from '../../components/ui';
+import { usePersonaEdition } from '../../stores/auth';
 import type { NoteCard as Note, NoteTier } from './types';
 
 const TIERS = [
@@ -32,6 +33,8 @@ export function NoteCard({
 }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  // The persona edition has no colleagues: a note is kept for the person, or not at all.
+  const persona = usePersonaEdition();
   const change = (tier: NoteTier) => {
     if (tier === note.tier || saving) return;
     setSaving(true);
@@ -61,11 +64,19 @@ export function NoteCard({
             <Segmented
               label="谁能用这条记忆"
               value={note.tier}
-              options={TIERS}
+              options={
+                persona ? TIERS.filter((t) => t.id !== 'colleague') : TIERS
+              }
               onChange={change}
               disabled={saving}
             />
-            <Tooltip label="同事能用：同事问到相关的事，分身可以用它。只有我：只有你自己的对话能用。不存：删掉这条，不能再恢复。">
+            <Tooltip
+              label={
+                persona
+                  ? '只有我：存下，你的对话能用。不存：删掉这条，不能再恢复。'
+                  : '同事能用：同事问到相关的事，分身可以用它。只有我：只有你自己的对话能用。不存：删掉这条，不能再恢复。'
+              }
+            >
               <IconButton label="这几档是什么意思" shape="circle">
                 <CircleHelp className="size-4" aria-hidden />
               </IconButton>

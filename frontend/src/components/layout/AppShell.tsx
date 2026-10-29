@@ -24,7 +24,7 @@ import { useWelcome } from '../../stores/welcome';
 import { BottomTabs, Sidebar, visitorRoutes } from './Sidebar';
 import { GlobalDrop } from './GlobalDrop';
 import { NewTwinForm, NewTwinHost } from './NewTwin';
-import { useAuth } from '../../stores/auth';
+import { useAuth, usePersonaEdition } from '../../stores/auth';
 import { StageHeader } from './StageHeader';
 import type { ShellContext } from './shellContext';
 const Welcome = lazy(() =>
@@ -65,6 +65,7 @@ export function AppShell() {
     location.pathname === '/inbox';
   const onWelcome = location.pathname === '/welcome';
   const canManage = useCanManage();
+  const persona = usePersonaEdition();
   const [checked, setChecked] = useState(false);
   const [noPersona, setNoPersona] = usePersonaState(false);
   const outlet = useOutlet({ noTwin: noPersona } satisfies ShellContext);
@@ -105,8 +106,9 @@ export function AppShell() {
       void usePersonas.getState().switchTo(own.id);
   }, [canManage, manages, pageOfOwnTwin, own]);
   // A company account that has not found itself yet starts at the way in whatever address it came by (the invitation
-  // is the site's own), so whether there is a twin at all is asked on the team's pages too.
-  const finding = !!address && !voiceDone;
+  // is the site's own), so whether there is a twin at all is asked on the team's pages too. The persona edition has no
+  // meetings to look in.
+  const finding = !!address && !voiceDone && !persona;
   const asking = !twinLevel || finding;
   useEffect(() => {
     if (!asking) return;
@@ -255,7 +257,8 @@ export function AppShell() {
       </div>
       {mobile && !twinLevel && <BottomTabs />}
       <Settings />
-      {canManage && !mobile && <GlobalDrop />}
+      {/* Dropped files go to the team's recording library, which the persona edition does not have. */}
+      {canManage && !mobile && !persona && <GlobalDrop />}
       <NewTwinHost />
     </div>
   );

@@ -35,6 +35,7 @@ import {
   accountLabel,
   featureOn,
   useAuth,
+  usePersonaEdition,
   type Feature,
 } from '../../stores/auth';
 import { THEMES, useTheme } from '../../stores/theme';
@@ -101,7 +102,9 @@ export function BottomTabs() {
 export function Sidebar() {
   const refreshPersonas = usePersonas((state) => state.refresh);
   const twins = usePersonas((state) => state.items);
-  const canManage = useCanManage();
+  // The team's places, its counts and finding someone in it; the persona edition has none of them.
+  const persona = usePersonaEdition();
+  const canManage = useCanManage() && !persona;
   const identity = useAuth((state) => state.identity);
   const teamName = useTeamName();
   const location = useLocation();
@@ -179,7 +182,14 @@ export function Sidebar() {
     organising.length && `${organising.length} 人整理中`,
     unsent.length && `${unsent.length} 项上传失败`,
   ].filter(Boolean);
-  const items = canManage
+  const items: {
+    to: string;
+    title: string;
+    icon: typeof MessageCircle;
+    count?: number;
+    accent?: boolean;
+    active?: boolean;
+  }[] = canManage
     ? [
         {
           to: '/team',
@@ -203,10 +213,20 @@ export function Sidebar() {
           ? [{ to: '/commitments', title: '承诺', icon: ListChecks }]
           : []),
       ]
-    : [{ to: '/chat', title: '对话', icon: MessageCircle }];
+    : persona
+      ? [
+          { to: '/chat', title: '对话', icon: MessageCircle },
+          {
+            to: '/memories',
+            title: '记忆',
+            icon: BookUser,
+            active: location.pathname.startsWith('/team/'),
+          },
+        ]
+      : [{ to: '/chat', title: '对话', icon: MessageCircle }];
   return (
     <aside className="nav-sidebar sticky top-0 flex h-dvh shrink-0 flex-col gap-3 overflow-y-auto px-3 py-4">
-      <TeamMark name={teamName} />
+      <TeamMark name={persona ? '我的分身' : teamName} />
       {canManage && (
         <>
           <SearchButton
@@ -290,7 +310,11 @@ export function SidebarAccount() {
   const identity = useAuth((state) => state.identity);
   const navigate = useNavigate();
   const self = useSelfTwin();
-  const waiting = useWaiting(self?.can_manage === false ? undefined : self?.id);
+  // The persona edition has no handoffs to wait for.
+  const persona = usePersonaEdition();
+  const waiting = useWaiting(
+    self?.can_manage === false || persona ? undefined : self?.id,
+  );
   const openSettings = useOpenSettings();
   const down = useSystem((state) => failing(state.data).length);
   const held = useSystem((state) => rebuildHeld(state.data));

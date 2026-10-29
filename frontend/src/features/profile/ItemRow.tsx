@@ -1,4 +1,5 @@
 import { useId, useState } from 'react';
+import { usePersonaEdition } from '../../stores/auth';
 import {
   ActionMenu,
   Badge,
@@ -29,7 +30,7 @@ export function ItemRow({
   item,
   pending,
   onReview,
-  onTier,
+  onTier: chooseTier,
   kindLabels,
 }: {
   item: ProfileItem;
@@ -42,6 +43,9 @@ export function ItemRow({
   onTier?: (item: ProfileItem, tier: Tier | null) => Promise<boolean>;
   kindLabels: Record<string, string>;
 }) {
+  // The persona edition has no colleagues: no memory is marked private, and none is opened to them.
+  const persona = usePersonaEdition();
+  const onTier = persona ? undefined : chooseTier;
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(item.statement);
   const [open, setOpen] = useState(false);
@@ -68,7 +72,9 @@ export function ItemRow({
               .filter(Boolean)
               .join(' · ')}
           </Text>
-          {item.tier === 'self' && <Badge>{TIER_LABELS.self}</Badge>}
+          {!persona && item.tier === 'self' && (
+            <Badge>{TIER_LABELS.self}</Badge>
+          )}
           {item.review === 'edited' && <Badge tone="info">你改过</Badge>}
           {secondhand(item) && <Badge>只有别人说</Badge>}
           {item.conflict && <Badge tone="warning">有矛盾</Badge>}

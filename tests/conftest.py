@@ -17,6 +17,8 @@ def _isolated_ops_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv("TWIN_ENV_FILE", raising=False)
     # A developer's own search key must not send test queries to the web.
     monkeypatch.delenv("TWIN_SEARCH_KEY", raising=False)
+    # Tests written for the team's pages run on the team edition; tests of the persona edition ask for it.
+    monkeypatch.setenv("TWIN_EDITION", "team")
 
 
 @pytest.fixture(autouse=True)

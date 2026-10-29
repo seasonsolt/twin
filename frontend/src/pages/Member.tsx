@@ -41,7 +41,7 @@ import { deletable, useDeleteTwin } from '../features/profile/useDeleteTwin';
 import { Ledger } from './Ledger';
 import type { Person } from './Recording';
 import { useIsSelf } from '../stores/access';
-import { featureOn, useAuth } from '../stores/auth';
+import { featureOn, useAuth, usePersonaEdition } from '../stores/auth';
 import { awaitsApproval, usePersonas, type Persona } from '../stores/personas';
 import { useStatus } from '../stores/status';
 import { useTeam } from '../stores/team';
@@ -59,6 +59,9 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
   const canManage = twin.can_manage !== false;
   const deleteTwin = useDeleteTwin();
   const self = useIsSelf(twin);
+  // What the person keeps for colleagues (你不在时, 赋能, team answers, going public) is the team's; the persona
+  // edition has the twin alone.
+  const team = !usePersonaEdition();
   const ledgerOn = useAuth((state) => featureOn(state.identity, 'ledger'));
   const memories = useMemoryCount(twin.id, canManage);
   const memoryUpdating = useStatus((state) => state.data?.memory_updating);
@@ -74,15 +77,15 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
       : found === 'ready' && memoryUpdating
         ? 'updating'
         : found;
-  const away = useAway(self && canManage);
+  const away = useAway(self && canManage && team);
   const waiting = away.data?.pending;
   const available: Section[] = [
     'overview',
     'memories',
-    ...(self ? (['away'] as const) : []),
+    ...(self && team ? (['away'] as const) : []),
     ...(ledgerOn ? (['ledger'] as const) : []),
     // Lending their judgement to colleagues is the person's alone to decide.
-    ...(self ? (['lens'] as const) : []),
+    ...(self && team ? (['lens'] as const) : []),
     'assets',
   ];
   // Older links name places that now live elsewhere: the graph is a view of the memories, and the questions the twin
@@ -90,7 +93,7 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
   const requested = params.get('section') ?? params.get('tab') ?? '';
   const renamed: Record<string, Section> = {
     graph: 'memories',
-    questions: self ? 'away' : 'overview',
+    questions: self && team ? 'away' : 'overview',
     channels: 'overview',
   };
   const section: Section =
@@ -101,7 +104,7 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
   const view: MemoryView =
     requested === 'graph' || asked === 'graph'
       ? 'graph'
-      : asked === 'answers' && self
+      : asked === 'answers' && self && team
         ? 'answers'
         : 'list';
   const openSettings = useOpenSettings();
@@ -147,7 +150,13 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
               }
             />
           }
-          status={TWIN_STATES[standing]}
+          // Waiting, in the persona edition, is for the person's own material rather than for meetings.
+          status={
+            !team && standing === 'waiting'
+              ? { ...TWIN_STATES.waiting, label: '等资料' }
+              : TWIN_STATES[standing]
+          }
+          inTeam={team}
           badge={twin.public && canManage ? <Badge>公开</Badge> : undefined}
           menu={
             canManage
@@ -161,11 +170,19 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
                         { replace: true },
                       ),
                   },
-                  { label: '设置', onSelect: () => openSettings('channels') },
                   {
-                    label: twin.public ? '设为私有' : '设为公开',
-                    onSelect: () => void togglePublic(),
+                    label: '设置',
+                    // The persona edition has no WeCom to connect: its twin's settings start at the aliases.
+                    onSelect: () => openSettings(team ? 'channels' : 'aliases'),
                   },
+                  ...(team
+                    ? [
+                        {
+                          label: twin.public ? '设为私有' : '设为公开',
+                          onSelect: () => void togglePublic(),
+                        },
+                      ]
+                    : []),
                   ...(deletable(twin)
                     ? [
                         {
@@ -249,7 +266,7 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
                   <MemoriesTab
                     identity={identity}
                     view={view}
-                    answers={self}
+                    answers={self && team}
                     onView={(next) =>
                       setParams(
                         next === 'list'
@@ -261,7 +278,7 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
                   />
                 ),
               },
-              ...(self
+              ...(self && team
                 ? [
                     {
                       value: 'away',
@@ -289,7 +306,7 @@ function TwinMember({ twin, person }: { twin: Persona; person?: Person }) {
                     },
                   ]
                 : []),
-              ...(self
+              ...(self && team
                 ? [
                     {
                       value: 'lens',

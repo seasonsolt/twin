@@ -1,12 +1,16 @@
 import { useCallback, useEffect } from 'react';
 import { api } from '../../lib/api';
 import { usePersonaId, usePersonaState } from '../../lib/usePersonaState';
+import { usePersonaEdition } from '../../stores/auth';
 import type { LensChoice } from './types';
 
 /** The lenses the person behind the twin in view has published for the viewer to ask in this conversation. None when
  * the viewer is that person, or there is nothing to ask; a failure to ask leaves it at none. `reload` is for after a
  * lens turned out not to be there any more. */
-export function useLensChoices(enabled: boolean) {
+export function useLensChoices(wanted: boolean) {
+  // The persona edition has no colleagues to lend a judgement to.
+  const persona = usePersonaEdition();
+  const enabled = wanted && !persona;
   const personaId = usePersonaId();
   const [choices, setChoices] = usePersonaState<LensChoice[]>([]);
   const load = useCallback(

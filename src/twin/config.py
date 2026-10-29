@@ -481,6 +481,22 @@ class UpgradeSettings(BaseModel):
     channel: Literal["off", "stable", "canary"] = "off"
 
 
+Edition = Literal["persona", "team"]
+
+
+def _default_edition() -> Edition:
+    """``TWIN_EDITION`` when it names an edition, else the persona edition."""
+    value = os.environ.get("TWIN_EDITION", "").strip()
+    return "team" if value == "team" else "persona"
+
+
+class ProductSettings(BaseModel):
+    # "persona": one person's own twin on their own machine (chat, memories, sources); the team's pages and their
+    # API (recording library, handoffs, lenses, delegation, team answers, work, ledger, WeCom) are not there.
+    # "team": everything, as in xjjk/twin. ``[product] edition`` wins over ``TWIN_EDITION``.
+    edition: Edition = Field(default_factory=_default_edition)
+
+
 class Settings(BaseModel):
     db_path: Path = Path("data/twin.db")
     target_name: str = "本人"
@@ -505,6 +521,7 @@ class Settings(BaseModel):
     budget: BudgetSettings = Field(default_factory=BudgetSettings)
     ops: OpsSettings = Field(default_factory=OpsSettings)
     upgrade: UpgradeSettings = Field(default_factory=UpgradeSettings)
+    product: ProductSettings = Field(default_factory=ProductSettings)
     kernel: KernelSettings = Field(default_factory=KernelSettings)
     tts: TTSSettings = Field(default_factory=TTSSettings)
     asr: ASRSettings = Field(default_factory=ASRSettings)

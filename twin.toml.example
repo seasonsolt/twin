@@ -4,6 +4,10 @@ target_aliases = []
 db_path = "data/twin.db"
 max_workers = 4
 
+# [product]
+# edition = "persona"  # 默认个人版：只有本人的分身（对话、记忆）
+# "team" 打开团队功能（录音库、转交、赋能等）；也可用环境变量 TWIN_EDITION
+
 # [kernel]
 # auto_rebuild = true
 # max_auto_rebuild_chunks = 400

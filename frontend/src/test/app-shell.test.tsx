@@ -161,6 +161,28 @@ it('keeps only name/AI label in the header and describes external hosts only on 
       ].map((link) => link.textContent),
       // The team's page counts its members (the twin whose page this is), the others nothing yet.
     ).toEqual(['团队1', '对话', '录音库', '待处理']);
+    // The persona edition is one person's own twin: its conversation and its memories, where this page is.
+    act(() =>
+      useAuth.setState({
+        identity: {
+          email: null,
+          admin: true,
+          auth_enabled: false,
+          edition: 'persona',
+          features: { work: false, ledger: false },
+        },
+      }),
+    );
+    const nav = screen.getByRole('navigation', { name: '主导航' });
+    expect(
+      [...nav.querySelectorAll('a')].map((link) => link.textContent),
+    ).toEqual(['对话', '记忆']);
+    expect(within(nav).getByRole('link', { name: '记忆' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
+    expect(screen.getByText('我的分身')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /问一句、找人/u })).toBeNull();
   } finally {
     useAuth.setState({ identity: null });
     rendered.unmount();

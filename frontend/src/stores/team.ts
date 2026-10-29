@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { api } from '../lib/api';
-import { useAuth } from './auth';
+import { personaEdition, useAuth } from './auth';
 import type { LibraryState, Recording } from '../pages/Library';
 import type { Person } from '../pages/Recording';
 import { reviewPath, type ReviewLists } from '../features/library/teamCounts';
@@ -115,6 +115,11 @@ export const useTeam = create<Team>((set, get) => {
     },
     absorb: (change) => set(change),
     refreshPeople: async () => {
+      // The persona edition has no recording library: nobody is found in it, and nobody is asked.
+      if (personaEdition(useAuth.getState().identity)) {
+        set({ people: [] });
+        return;
+      }
       const folks = await api<{ items?: Person[] }>('/api/library/people');
       set({ people: folks.items ?? [] });
     },

@@ -31,6 +31,7 @@ export function MemberHeader({
   badge,
   menu,
   primary,
+  inTeam = true,
 }: {
   name: string;
   /** The page is the signed-in person's own. */
@@ -42,21 +43,25 @@ export function MemberHeader({
   menu?: ActionItem[];
   /** The one thing to do next: talk to their twin, or make one. */
   primary?: { label: string; onClick: () => void };
+  /** Whether the page sits under the team, as the way back says; the persona edition has the twin alone. */
+  inTeam?: boolean;
 }) {
   return (
     <Stack gap={4}>
-      <Row as="nav" gap={2} aria-label="位置">
-        <TextLink to="/team" size="sm">
-          团队
-        </TextLink>
-        <Text as="span" size="sm" tone="tertiary" aria-hidden>
-          /
-        </Text>
-        <Text as="span" size="sm" tone="secondary">
-          {name}
-          {you && '（你）'}
-        </Text>
-      </Row>
+      {inTeam && (
+        <Row as="nav" gap={2} aria-label="位置">
+          <TextLink to="/team" size="sm">
+            团队
+          </TextLink>
+          <Text as="span" size="sm" tone="tertiary" aria-hidden>
+            /
+          </Text>
+          <Text as="span" size="sm" tone="secondary">
+            {name}
+            {you && '（你）'}
+          </Text>
+        </Row>
+      )}
       <Toolbar as="header" gap={4}>
         <Row gap={4} grow>
           <AvatarFrame size="2xl">{face}</AvatarFrame>

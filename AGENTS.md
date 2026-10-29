@@ -22,6 +22,10 @@
 
 完整说明见 `docs/LOCAL_DEV.md`。
 
+## 产品版本
+
+本仓库默认**个人版**（`twin.toml` 的 `[product] edition = "persona"`，或环境变量 `TWIN_EDITION`）：一个人自己的分身，网页只有对话和记忆；团队的接口（`web/system.py` 的 `TEAM_PATHS`）返回 404，前端按 `/api/whoami` 的 `edition` 隐藏团队页面。`edition = "team"` 打开全部团队功能，团队功能在 xjjk/twin 维护。测试默认按团队版跑（`tests/conftest.py`），测个人版的用例自己设 `edition`。方向见 `docs/PRODUCT_PERSONA_AGENT.md`。
+
 ## 默认能力
 
 文字聊天、会议录音转写和按语义检索（本机 Ollama 的 bge-m3，失败时退回 hashing）默认开启；朗读真人音色和口型视频默认关闭，开启方法见 `docs/MEDIA.md`。

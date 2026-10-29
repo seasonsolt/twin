@@ -20,7 +20,19 @@ export interface Identity {
   features?: Partial<Record<Feature, boolean>>;
   /** The team's name, set in the system settings; none until an administrator names it. */
   team_name?: string | null;
+  /** Which product the server runs (``[product] edition``); missing (an older server) means the team's. */
+  edition?: Edition;
 }
+
+/** 'persona': one person's own twin on their own machine, with chat and its memories only; 'team': everything. */
+export type Edition = 'persona' | 'team';
+
+export const personaEdition = (identity: Identity | null) =>
+  identity?.edition === 'persona';
+
+/** Whether this is the persona edition, where the team's pages are not there. */
+export const usePersonaEdition = () =>
+  useAuth((state) => personaEdition(state.identity));
 
 /** Pages that can be switched off. Chat is the twin itself and never is. */
 export type Feature = 'work' | 'ledger';

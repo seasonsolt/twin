@@ -3,7 +3,12 @@ import { HashRouter, Navigate, Route, Routes } from 'react-router';
 import { MotionConfig } from 'motion/react';
 import { AppShell } from './components/layout/AppShell';
 import { useCanManage } from './stores/access';
-import { featureOn, useAuth, type Feature } from './stores/auth';
+import {
+  featureOn,
+  useAuth,
+  usePersonaEdition,
+  type Feature,
+} from './stores/auth';
 import { AuthGate } from './features/auth/AuthGate';
 import {
   ConfirmProvider,
@@ -44,10 +49,17 @@ const Gallery = lazy(() =>
   import('./pages/Gallery').then((module) => ({ default: module.Gallery })),
 );
 
-// Those who run the twins start from their team (no twin is set up first); a guest who may only talk to a twin
-// starts in its chat.
+// Those who run the twins start from their team (no twin is set up first); a guest who may only talk to a twin,
+// and the person of the persona edition, start in its chat.
 function Start() {
-  return <Navigate to={useCanManage() ? '/team' : '/chat'} replace />;
+  const canManage = useCanManage();
+  const persona = usePersonaEdition();
+  return <Navigate to={canManage && !persona ? '/team' : '/chat'} replace />;
+}
+
+// The team's pages are not there in the persona edition: their addresses lead to chat.
+function TeamPage({ children }: { children: ReactNode }) {
+  return usePersonaEdition() ? <Navigate to="/chat" replace /> : children;
 }
 
 // A page an administrator switched off is not there: its address leads to chat, which always is.
@@ -82,20 +94,45 @@ export function App() {
                     <Route index element={<Start />} />
                     {/* The way in (finding their voice, then the twin made for them): AppShell frames it. */}
                     <Route path="welcome" element={null} />
-                    <Route path="team" element={<Home />} />
+                    <Route
+                      path="team"
+                      element={
+                        <TeamPage>
+                          <Home />
+                        </TeamPage>
+                      }
+                    />
                     <Route path="team/twin/:twinId" element={<Member />} />
                     <Route path="team/:id" element={<Member />} />
                     <Route
                       path="twins"
                       element={<Navigate to="/team" replace />}
                     />
-                    <Route path="library" element={<Library />} />
-                    <Route path="inbox" element={<Inbox />} />
+                    <Route
+                      path="library"
+                      element={
+                        <TeamPage>
+                          <Library />
+                        </TeamPage>
+                      }
+                    />
+                    <Route
+                      path="inbox"
+                      element={
+                        <TeamPage>
+                          <Inbox />
+                        </TeamPage>
+                      }
+                    />
                     {/* Finding one's voice is the way in's first step now: AppShell takes it there. */}
                     <Route path="voice" element={null} />
                     <Route
                       path="library/:recordingId"
-                      element={<Recording />}
+                      element={
+                        <TeamPage>
+                          <Recording />
+                        </TeamPage>
+                      }
                     />
                     <Route path="chat" element={<Chat />} />
                     <Route path="work" element={<WorkRedirect />} />

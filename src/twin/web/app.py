@@ -462,7 +462,11 @@ def create_app(
                     resume()
 
     system_settings.listeners.append(system_changed)
-    auth.extra = lambda: {"features": system_settings.features(), "team_name": system_settings.team_name()}
+    auth.extra = lambda: {
+        "edition": settings.product.edition,
+        "features": system_settings.features(),
+        "team_name": system_settings.team_name(),
+    }
     auth.public = lambda: {"team_name": system_settings.team_name()}
     app.add_middleware(PersonaMiddleware, registry=registry)
     # Between sign-in and the twin's own routes, which PersonaMiddleware calls directly.

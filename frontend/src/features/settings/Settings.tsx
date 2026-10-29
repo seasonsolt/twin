@@ -25,7 +25,7 @@ import {
   ThemePicker,
   type SettingsSection,
 } from '../../components/ui';
-import { accountLabel, useAuth } from '../../stores/auth';
+import { accountLabel, personaEdition, useAuth } from '../../stores/auth';
 import { usePersonas } from '../../stores/personas';
 import {
   failing,
@@ -71,6 +71,13 @@ type SectionKey =
   | SystemSection;
 
 type Section = Omit<SettingsSection, 'status'> & { key: SectionKey };
+
+const TEAM_SECTIONS = new Set<SectionKey>([
+  'channels',
+  'team',
+  'features',
+  'library',
+]);
 
 /** Opens the settings at a section, over the current page. */
 export function useOpenSettings() {
@@ -185,7 +192,8 @@ export function Settings() {
   );
   const admin = !!identity?.admin;
   const ownsTwin = !!twin && twin.can_manage !== false;
-  const sections: Section[] = [
+  const persona = personaEdition(identity);
+  const listed: Section[] = [
     { key: 'look', label: '外观', group: '我', icon: Palette },
     { key: 'account', label: '账号', icon: UserRound },
     ...(ownsTwin
@@ -216,13 +224,29 @@ export function Settings() {
         ] satisfies Section[])
       : []),
   ];
+  // The persona edition has no WeCom, team name, team-wide switches or recording library: the twin's group keeps its
+  // heading on its next section, and the models, left without the team's, head a group of their own.
+  const sections: Section[] = [];
+  let heading: string | undefined;
+  for (const section of listed) {
+    if (persona && TEAM_SECTIONS.has(section.key)) {
+      heading ??= section.group;
+      continue;
+    }
+    const group =
+      persona && section.key === 'models' ? '模型' : (section.group ?? heading);
+    sections.push(group ? { ...section, group } : section);
+    heading = undefined;
+  }
   const requested = params.get(SETTINGS_PARAM);
   const open = requested !== null;
   // Without a section the dialog opens where its owner most often goes.
   const fallback: SectionKey = admin
     ? 'status'
     : ownsTwin
-      ? 'channels'
+      ? persona
+        ? 'aliases'
+        : 'channels'
       : 'look';
   const active =
     sections.find((section) => section.key === requested)?.key ?? fallback;

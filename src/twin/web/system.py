@@ -61,6 +61,29 @@ FEATURE_PATHS: dict[str, Feature] = {
     "/api/persona/ledger": "ledger",
     "/api/personas/commitments": "ledger",
 }
+# The team's API, which the persona edition does not have (``[product] edition``): the recording library (with its
+# minutes and finding one's voice in it), finding who knows a matter, team answers, handoffs, delegation, lenses,
+# work, the ledger and WeCom. A path is the prefix itself or anything under it.
+TEAM_PATHS: tuple[str, ...] = (
+    "/api/library",
+    "/api/personas/ask",
+    "/api/personas/team-answers",
+    "/api/personas/commitments",
+    "/api/persona/handoffs",
+    "/api/persona/answers",
+    "/api/persona/team-answers",
+    "/api/persona/delegations",
+    "/api/persona/lenses",
+    "/api/persona/work",
+    "/api/persona/ledger",
+    "/api/channels",
+)
+
+
+def team_path(path: str) -> bool:
+    return any(path == prefix or path.startswith(prefix + "/") for prefix in TEAM_PATHS)
+
+
 ModelSection = Literal["llm", "chat_llm", "embed"]
 MODEL_SECTIONS: tuple[ModelSection, ...] = ("llm", "chat_llm", "embed")
 MODEL_FIELDS = ("base_url", "model")
@@ -272,8 +295,14 @@ class SystemSettings:
 
     # ------------------------------------------------------------ features
 
+    @property
+    def persona_edition(self) -> bool:
+        return self.settings.product.edition == "persona"
+
     def feature_on(self, name: Feature) -> bool:
-        """An untouched feature is on."""
+        """An untouched feature is on; the persona edition has none of them."""
+        if self.persona_edition:
+            return False
         with self._lock:
             stored = self._data.get("features", {}).get(name, {})
         return bool(stored.get("enabled", True)) if isinstance(stored, dict) else True
@@ -288,6 +317,8 @@ class SystemSettings:
         self._record(by, "feature", feature=name, enabled=enabled)
 
     def feature_view(self) -> dict[str, dict[str, Any]]:
+        if self.persona_edition:
+            return {}
         with self._lock:
             stored = dict(self._data.get("features", {}))
         found: dict[str, dict[str, Any]] = {}
@@ -542,7 +573,8 @@ class SystemSettings:
 
 
 class FeatureGate:
-    """Refuses the API of a page an administrator switched off, for every twin and every caller."""
+    """Refuses the API of a page an administrator switched off, for every twin and every caller, and in the persona
+    edition the team's API, as if it were not there."""
 
     def __init__(self, app: ASGIApp, system: SystemSettings) -> None:
         self.app, self.system = app, system
@@ -550,6 +582,10 @@ class FeatureGate:
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "http":
             path = str(scope.get("path", ""))
+            if self.system.persona_edition and team_path(path):
+                response = JSONResponse({"detail": "个人版没有这项功能", "code": "edition"}, status_code=404)
+                await response(scope, receive, send)
+                return
             for prefix, name in FEATURE_PATHS.items():
                 if (path == prefix or path.startswith(prefix + "/")) and not self.system.feature_on(name):
                     response = JSONResponse(
@@ -814,7 +850,7 @@ def register(
     def put_feature(name: str, body: SwitchBody, request: Request) -> dict[str, Any]:
         """Switch 工作 or 承诺账本 on or off for everyone at once; their data stays. Chat cannot be switched off."""
         by = admin(request)
-        if name not in FEATURES:
+        if name not in FEATURES or system.persona_edition:
             raise HTTPException(404, "没有这个功能；聊天不能关闭")
         system.set_feature(name, body.enabled, by)
         if name == "ledger":

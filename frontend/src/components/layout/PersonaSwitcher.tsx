@@ -20,7 +20,7 @@ import {
 import { personaUrl } from '../../lib/persona';
 import { useManagesCurrent } from '../../stores/access';
 import { usePersonas, type Persona } from '../../stores/personas';
-import { useAuth } from '../../stores/auth';
+import { useAuth, usePersonaEdition } from '../../stores/auth';
 import { useMobile } from '../../lib/useMobile';
 import { useOpenSettings } from '../../features/settings/Settings';
 import { PresetSvg } from '../../features/avatar/presets';
@@ -95,6 +95,7 @@ export function PersonaSwitcher({
   const current = items.find((item) => item.id === id);
   const identity = useAuth((state) => state.identity);
   const canManage = useManagesCurrent();
+  const persona = usePersonaEdition();
   const openSettings = useOpenSettings();
   useEffect(() => {
     if (!open) return;
@@ -237,9 +238,13 @@ export function PersonaSwitcher({
             {/* The twin's own pages are reached from here: the side bar is about the team. */}
             {[
               ...(canManage ? [{ to: '/profile', title: '档案' }] : []),
-              { to: '/team', title: '团队' },
-              { to: '/library', title: '录音库' },
-              { to: '/team', title: '全部分身' },
+              ...(persona
+                ? []
+                : [
+                    { to: '/team', title: '团队' },
+                    { to: '/library', title: '录音库' },
+                    { to: '/team', title: '全部分身' },
+                  ]),
             ].map(({ to, title }) => (
               <TextLink
                 key={title}
@@ -252,16 +257,19 @@ export function PersonaSwitcher({
                 {title}
               </TextLink>
             ))}
-            {/* The card opens over the page in view rather than taking the person to the twins page. */}
-            <TextLink
-              onClick={() => {
-                navigating.current = true;
-                setOpen(false);
-                useNewTwinCard.getState().set(true);
-              }}
-            >
-              ＋ 新建分身
-            </TextLink>
+            {/* The card opens over the page in view rather than taking the person to the twins page. The persona
+                edition is one person's own twin. */}
+            {!persona && (
+              <TextLink
+                onClick={() => {
+                  navigating.current = true;
+                  setOpen(false);
+                  useNewTwinCard.getState().set(true);
+                }}
+              >
+                ＋ 新建分身
+              </TextLink>
+            )}
             <TextLink
               onClick={() => {
                 navigating.current = true;

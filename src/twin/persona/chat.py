@@ -40,6 +40,7 @@ from . import gate
 from .assistant import ASSISTANT_MEETING_SECTION, ASSISTANT_STREAM_FORMAT, ASSISTANT_SYSTEM
 from .attachments import AttachmentPassage
 from .connect import connect
+from .crisis import crisis_reply, in_crisis
 from .derive import derive, needs_derivation
 from .dimensions import DIMENSIONS, FACET_BY_ID, FACETS
 from .items import PersonaItem, item_as_of
@@ -47,6 +48,7 @@ from .ledger import KIND_LABELS, SELF, STATUS_LABELS, for_chat
 from .lexical import BM25, cached, tokenize
 from .locate import locate, needs_locating
 from .quotes import remove_unverified_quotes
+from .reflection import REFLECTION_SECTIONS, Reflection
 from .rewrite import Rewrite, rewrite
 from .schema import (
     MAX_TOPIC_FACETS,
@@ -371,6 +373,8 @@ class PersonaContext:
     reach: Reach = "none"
     # The conversation is the person's own, with their assistant (``persona.assistant``), not the twin speaking as them.
     assistant: bool = False
+    # How the person is talking with their assistant this turn, besides asking it things (``persona.reflection``).
+    reflection: Reflection = ""
     # What the person said themself in this conversation, in answer to a handoff, oldest first; it settles the
     # matter, and the answer may quote it.
     owner_said: list[str] = field(default_factory=list)
@@ -766,6 +770,7 @@ class PersonaChat:
         reach: Reach = "none",
         assistant: bool = False,
         asker: Asker | None = None,
+        reflection: Reflection = "",
     ) -> None:
         """``audience``: the tier of memory the conversation answers from. A conversation of the person themself
         (``self``) may use every item; any other (``colleague``, the default, so a caller that says nothing never
@@ -777,10 +782,14 @@ class PersonaChat:
         here. ``reach``: whom the part of an answer only the person can
         settle goes to (``Reach``); the person themself, whatever it says, is never handed anything. ``assistant``: the
         conversation is the person's own, answered by their assistant in the second person (``persona.assistant``);
-        only the self tier has one. ``asker``: who is asking, so the twin can say whom it is talking to."""
+        only the self tier has one. ``asker``: who is asking, so the twin can say whom it is talking to.
+        ``reflection``: a way of talking with the assistant about oneself (``persona.reflection``); only the
+        assistant has them. A message that speaks of ending one's life or harming oneself is answered by the crisis
+        guard (``persona.crisis``) before anything else, whoever asks."""
         self.audience = audience
         self.asker = asker
         self.assistant = assistant and audience == SELF_AUDIENCE
+        self.reflection: Reflection = reflection if self.assistant else ""
         self.reach: Reach = "none" if audience == SELF_AUDIENCE else reach
         gate.version(store)  # ``MemoryUpdating`` when its library cannot be read
         self.meeting_record = gate.meeting_record(store)
@@ -954,6 +963,7 @@ class PersonaChat:
             meeting_record=self.meeting_record,
             audience=self.audience,
             assistant=self.assistant,
+            reflection=self.reflection,
             passages=passages,
             minutes=self._minutes(material, named) if named is not None else [],
         )
@@ -1048,6 +1058,8 @@ class PersonaChat:
     ) -> ChatReply:
         if not messages or messages[-1].role != "user":
             raise ValueError("the last message must be the user's")
+        if in_crisis(messages[-1].content):
+            return crisis_reply()
         if persist and (unbuilt := self._unbuilt_reply(as_of)) is not None:
             return unbuilt
         ctx = self._search(messages, as_of, today)
@@ -1080,6 +1092,11 @@ class PersonaChat:
         words begins, for the page to say what it waits for."""
         if not messages or messages[-1].role != "user":
             raise ValueError("the last message must be the user's")
+        if in_crisis(messages[-1].content):
+            crisis = crisis_reply()
+            yield crisis.reply
+            yield crisis
+            return
         # Every store read and write runs off the event loop, which other requests share.
         if persist and (unbuilt := await off_loop(partial(self._unbuilt_reply, as_of))) is not None:
             yield unbuilt.reply
@@ -1241,6 +1258,8 @@ class PersonaChat:
         persist: bool,
         verified: bool = True,
     ) -> ChatReply:
+        # A way of looking at oneself keeps no promise (``persona.reflection``).
+        promising = self.assistant and not ctx.reflection
         text, quotes_removed = remove_unverified_quotes(draft.reply, [*_quote_materials(ctx), messages[-1].content])
         # Record ids belong in citations, not in the text the person reads; move any the reply wrote inline.
         inline = [m.group(1) for m in INLINE_ID.finditer(text) if m.group(1) in ctx.ids]
@@ -1293,11 +1312,12 @@ class PersonaChat:
             owner_ask=draft.owner_ask.strip()[:300] if owner_part != "none" else "",
             commit_what=(draft.commit_what.strip() or draft.owner_ask.strip())[:300] if owner_part == "commit" else "",
             commit_due=_iso_date(draft.commit_due) if owner_part == "commit" else None,
-            promise_what=draft.promise_what.strip()[:300] if self.assistant else "",
-            promise_to=draft.promise_to.strip()[:60] if self.assistant and draft.promise_what.strip() else "",
-            promise_due=_iso_date(draft.promise_due) if self.assistant and draft.promise_what.strip() else None,
+            promise_what=draft.promise_what.strip()[:300] if promising else "",
+            promise_to=draft.promise_to.strip()[:60] if promising and draft.promise_what.strip() else "",
+            promise_due=_iso_date(draft.promise_due) if promising and draft.promise_what.strip() else None,
         )
-        if persist:
+        # Looking at oneself is not a question the twin failed or was asked to know more about.
+        if persist and not ctx.reflection:
             asked = [m.content for m in messages if m.role == "user"]
             self.store.log_chat(asked[-1], reply, asked[-2] if len(asked) > 1 else "")
         return reply
@@ -1664,7 +1684,13 @@ def chat_system_prompt(name: str, ctx: PersonaContext) -> str:
     prompt = template.format(name=name, scope=scope, today=today, core=core, style=style, voice=voice, facets=facets)
     team = TEAM_ANSWER_SECTION if ctx.team_answers else ""
     if ctx.assistant:
-        return prompt + (ASSISTANT_MEETING_SECTION if ctx.meeting_record else "") + team + _attachment_section(ctx)
+        return (
+            prompt
+            + (ASSISTANT_MEETING_SECTION if ctx.meeting_record else "")
+            + team
+            + _attachment_section(ctx)
+            + REFLECTION_SECTIONS[ctx.reflection]
+        )
     if ctx.meeting_record:
         prompt += MEETING_RECORD_SECTION
     if ctx.asker is not None:

@@ -623,3 +623,80 @@ def test_without_sign_in_the_one_person_lists_their_conversations_and_no_twin_is
         assert "note" not in final.text
         trial = web.post("/api/persona/chat/stream", json={**sent, "preview": True}, headers=CSRF)
         assert trial.status_code == 403
+
+
+# ------------------------------------------------------------ 照镜子 · 随便说 · 记梦, and the crisis guard
+
+
+@pytest.mark.parametrize(("reflection", "heading"), [("mirror", "照镜子"), ("free", "随便说"), ("dream", "记梦")])
+def test_a_way_of_looking_at_oneself_is_the_assistants_and_keeps_no_question_or_promise(
+    scene: Scene, reflection: str, heading: str
+) -> None:
+    scene.take()
+    scene.as_("person")
+    before = logged(scene.path)
+    final = scene.say(scene.conversation(), "我答应王屿周五前给方案", reflection=reflection)
+    [system] = [s for s in scene.recorder.seen if "本人的助手" in s]
+    assert f"## 这一轮：{heading}" in system and "不下诊断" in system
+    # Looking at oneself is neither a question the twin is asked to know more about nor a promise made.
+    assert logged(scene.path) == before and "commitment" not in final
+    with PersonaStore(scene.path) as store:
+        assert store.list_ledger() == []
+    # Asking as usual still keeps both.
+    scene.recorder.seen.clear()
+    scene.say(scene.conversation(), "我答应王屿周五前给方案")
+    assert "## 这一轮" not in scene.recorder.seen[0] and logged(scene.path) == before + 1
+
+
+def test_a_colleague_cannot_ask_the_twin_to_look_at_them(scene: Scene) -> None:
+    scene.take()
+    scene.as_("visitor")
+    scene.say(scene.conversation(), reflection="mirror")
+    assert "数字分身" in scene.recorder.seen[0] and "## 这一轮" not in scene.shown()
+
+
+def test_a_message_of_ending_ones_life_stops_the_conversation_before_any_model(scene: Scene) -> None:
+    from twin.persona.crisis import CRISIS_REPLY
+
+    scene.take()
+    for who in ("person", "visitor"):
+        scene.as_(who)
+        conversation = scene.conversation()
+        before = logged(scene.path)
+        final = scene.say(conversation, "最近总觉得活不下去了", reflection="mirror")
+        assert scene.recorder.seen == []  # nothing was asked of the model, nothing looked up
+        assert final["reply"] == CRISIS_REPLY and final["crisis"] is True and final["citations"] == []
+        assert "12356" in final["reply"] and logged(scene.path) == before
+        saved = scene.web.get(f"/api/conversations/{conversation}", headers=scene.headers).json()
+        assert [t["role"] for t in saved["turns"]] == ["user", "twin"]
+    # A note that says it is not kept as one: the guard comes first.
+    scene.as_("person")
+    final = scene.say(scene.conversation(), "记一下，我不想活了")
+    assert final["crisis"] is True and "note" not in final
+
+
+def test_in_the_persona_edition_whoever_uses_the_twin_without_sign_in_is_the_person(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One person's own twin on their own computer: the one person there is is answered by their assistant, can keep
+    a note and look at themself."""
+    monkeypatch.setenv("TWIN_EDITION", "persona")
+    monkeypatch.setattr(PersonaProcessing, "queue", lambda _: None)
+    recorder = Recorder()
+    app = create_app(
+        Settings(db_path=tmp_path / "twin.db"), llm_factory=lambda: recorder, embedder_factory=HashingEmbedder
+    )
+    with TestClient(app, base_url="http://localhost") as web:
+        made = web.post("/api/conversations", json={}, headers=CSRF).json()["id"]
+        [twin] = web.get("/api/personas").json()
+        assert (twin["mine"], twin["approved"]) == (True, True)
+        assert web.get("/api/personas/conversations").json()["mine"]["persona_id"] == twin["id"]
+        sent = {"messages": [{"role": "user", "content": "记一下，周五不上班"}], "conversation_id": made}
+        assert '"note"' in web.post("/api/persona/chat/stream", json=sent, headers=CSRF).text
+        with PersonaStore(tmp_path / "twin.db") as store:
+            store.set_meta("built_at", "2026-01-01")
+            store.replace_facet_items("2.1", [item("pi_work", "2.1", WORK)])
+        asked = {**sent, "messages": [{"role": "user", "content": QUESTION}], "reflection": "mirror"}
+        assert web.post("/api/persona/chat/stream", json=asked, headers=CSRF).status_code == 200
+    [system] = [s for s in recorder.seen if "本人的助手" in s]
+    assert "## 这一轮：照镜子" in system

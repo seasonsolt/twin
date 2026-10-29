@@ -16,6 +16,7 @@ import {
   type ChatReply,
   type HandoffLine,
   type NoteTier,
+  type Reflection,
   type Turn,
 } from './types';
 
@@ -254,11 +255,13 @@ export function useConversation(active: boolean) {
   ]);
 
   /** ``trial``: ask as a colleague would be answered (看同事会得到什么), and keep nothing of it. ``lens``: put the
-   * question to that lens of the person (a colleague's, not a streamed answer of the twin). */
+   * question to that lens of the person (a colleague's, not a streamed answer of the twin). ``reflection``: the way
+   * the person is talking with their own assistant about themself. */
   const send = async (
     text = draft,
     trial = false,
     lens: string | null = null,
+    reflection: Reflection = 'ask',
   ) => {
     text = text.trim();
     if (
@@ -338,6 +341,7 @@ export function useConversation(active: boolean) {
               .filter(spoken)
               .slice(-40)
               .map(({ role, content }) => ({ role, content })),
+            ...(reflection !== 'ask' && { reflection }),
           };
       const response =
         attachments.length && !trial

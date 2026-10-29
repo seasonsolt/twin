@@ -14,6 +14,7 @@ import {
   toast,
 } from '../../components/ui';
 import { api } from '../../lib/api';
+import { usePersonaEdition } from '../../stores/auth';
 
 /** One question of 补一补, asked for a facet the twin does not know well yet. */
 interface Question {
@@ -23,6 +24,16 @@ interface Question {
   facet_name: string;
   level: number;
   level_label: string;
+  /** The stage of the person's life a question of 人生回顾 is about. */
+  stage?: string;
+  stage_label?: string;
+}
+/** How far one stage of 人生回顾 has been told. */
+interface Stage {
+  id: string;
+  label: string;
+  answered: number;
+  total: number;
 }
 type Choice = 'colleague' | 'self' | 'none';
 /** What the answer was read into: a conclusion for a facet, and who may use it until the person says. */
@@ -53,6 +64,8 @@ export interface FillScope {
   /** The aspect to ask about when what the twin knows least has nothing to ask: its facets the person keeps to
    * themself are not asked unprompted, but the aspect was shown as wanting more. */
   otherwise?: string;
+  /** 人生回顾: the person's life asked about stage by stage, going on where the last sitting stopped. */
+  life?: boolean;
 }
 
 /**
@@ -80,8 +93,18 @@ export function FillDialog({
   const [worth, setWorth] = useState<Worth[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [stages, setStages] = useState<Stage[]>([]);
   const kept = useRef(0);
   const question = questions?.[index];
+  const life = !!scope?.life;
+  // The persona edition has no colleagues: a conclusion is kept for the person, or not at all.
+  const persona = usePersonaEdition();
+  const options = persona
+    ? CHOICES.filter((choice) => choice.id !== 'colleague')
+    : CHOICES;
+  const tierOf = (draft: Draft): Choice =>
+    persona && draft.tier === 'colleague' ? 'self' : draft.tier;
+  const stage = stages.find((s) => s.id === question?.stage);
 
   useEffect(() => {
     if (!open) return;
@@ -90,8 +113,10 @@ export function FillDialog({
     if (scope?.facet) query.set('facet', scope.facet);
     if (scope?.dimension) query.set('dimension', scope.dimension);
     const fetchQuestions = (path: URLSearchParams) =>
-      api<{ questions: Question[] }>(
-        `/api/persona/fill${path.size ? `?${path}` : ''}`,
+      api<{ questions: Question[]; stages?: Stage[] }>(
+        life
+          ? '/api/persona/life-review'
+          : `/api/persona/fill${path.size ? `?${path}` : ''}`,
         { signal: controller.signal },
       );
     setQuestions(null);
@@ -102,18 +127,21 @@ export function FillDialog({
     kept.current = 0;
     void fetchQuestions(query)
       .then((reply) =>
-        reply.questions.length || query.size || !scope?.otherwise
+        reply.questions.length || query.size || life || !scope?.otherwise
           ? reply
           : fetchQuestions(new URLSearchParams({ dimension: scope.otherwise })),
       )
-      .then((reply) => setQuestions(reply.questions))
+      .then((reply) => {
+        setQuestions(reply.questions);
+        setStages(reply.stages ?? []);
+      })
       .catch((failure: unknown) => {
         if (controller.signal.aborted) return;
         setQuestions([]);
         setError(failure instanceof Error ? failure.message : '加载失败');
       });
     return () => controller.abort();
-  }, [open, scope?.facet, scope?.dimension, scope?.otherwise]);
+  }, [open, life, scope?.facet, scope?.dimension, scope?.otherwise]);
 
   const items = (list: Draft[], picked: Choice[]) =>
     list.map((draft, i) => ({
@@ -140,7 +168,7 @@ export function FillDialog({
         },
       );
       setDrafts(reply.drafts);
-      setChoices(reply.drafts.map((draft) => draft.tier));
+      setChoices(reply.drafts.map(tierOf));
       setWorth(reply.changes);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : '整理失败');
@@ -192,6 +220,12 @@ export function FillDialog({
         json: body(drafts, choices),
       });
       kept.current += reply.saved;
+      if (life && question)
+        setStages((current) =>
+          current.map((s) =>
+            s.id === question.stage ? { ...s, answered: s.answered + 1 } : s,
+          ),
+        );
       next();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : '没存上，请重试');
@@ -200,20 +234,33 @@ export function FillDialog({
     }
   };
 
+  // A question of 人生回顾 passed over is asked again once every other has been.
+  const skip = () => {
+    if (life && question)
+      void api('/api/persona/life-review/skip', {
+        method: 'POST',
+        json: { question: question.id },
+      }).catch(() => undefined);
+    next();
+  };
+
   const total = questions?.length ?? 0;
   const raised = worth.filter((change) => change.after > change.before);
   return (
     <Dialog
       open={open}
       onOpenChange={(opened) => (opened ? onOpenChange(true) : finish())}
-      title="补一补"
+      title={life ? '回顾人生' : '补一补'}
     >
       {questions === null ? (
         <Skeleton className="h-40" />
       ) : !question ? (
         <Stack gap={3}>
           <Text tone="secondary">
-            {error || '暂时没有要补的，分身对你已经了解得不错。'}
+            {error ||
+              (life
+                ? '人生回顾都答完了。'
+                : '暂时没有要补的，分身对你已经了解得不错。')}
           </Text>
           <Row justify="end">
             <Button variant="ghost" onClick={finish}>
@@ -230,7 +277,9 @@ export function FillDialog({
           )}
           <Stack gap={1}>
             <Text size="sm" tone="secondary">
-              {question.facet_name}
+              {stage
+                ? `${stage.label} · ${stage.answered}/${stage.total}`
+                : (question.stage_label ?? question.facet_name)}
             </Text>
             <Text weight="medium">{question.text}</Text>
           </Stack>
@@ -271,8 +320,8 @@ export function FillDialog({
                     <Text>{draft.statement}</Text>
                     <Segmented
                       label="谁能用这条"
-                      value={choices[i] ?? draft.tier}
-                      options={CHOICES}
+                      value={choices[i] ?? tierOf(draft)}
+                      options={options}
                       onChange={(choice) => void choose(i, choice)}
                     />
                   </Stack>
@@ -306,7 +355,7 @@ export function FillDialog({
             </Text>
           )}
           <Row gap={2} justify="end">
-            <Button variant="ghost" disabled={busy} onClick={next}>
+            <Button variant="ghost" disabled={busy} onClick={skip}>
               跳过
             </Button>
             <Button

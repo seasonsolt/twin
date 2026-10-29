@@ -406,8 +406,10 @@ export function Overview({ ask }: { ask?: AskPerson }) {
   const [text, setText] = useState('');
   const [showConflicts, setShowConflicts] = useState(false);
   const [chosen, setChosen] = usePersonaState<string | null>(null);
-  // 补一补 is open: for what the twin knows least, or for one aspect.
+  // 补一补 is open: for what the twin knows least, or for one aspect; in the persona edition the person is asked
+  // about their life instead, stage by stage (人生回顾).
   const [filling, setFilling] = useState<FillScope | null>(null);
+  const reviewing = sutai && profile.canTier;
   // A link from a colleague asking for more of one aspect opens 补一补 on it, for the person it is meant for.
   const [params, setParams] = useSearchParams();
   const requested = params.get('fill');
@@ -530,12 +532,18 @@ export function Overview({ ask }: { ask?: AskPerson }) {
             </Button>
           </p>
         )}
-        {wanted.length > 0 && (!empty || profile.canTier) && (
+        {((wanted.length > 0 && (!empty || profile.canTier)) || reviewing) && (
           <Row gap={3} wrap>
-            <Text as="span" size="sm" tone="secondary">
-              了解得还少：{wanted.join('、')}
-            </Text>
-            {profile.canTier ? (
+            {wanted.length > 0 && (
+              <Text as="span" size="sm" tone="secondary">
+                了解得还少：{wanted.join('、')}
+              </Text>
+            )}
+            {reviewing ? (
+              <Button size="sm" onClick={() => setFilling({ life: true })}>
+                回顾人生
+              </Button>
+            ) : profile.canTier ? (
               <Button
                 size="sm"
                 onClick={() => setFilling({ otherwise: wantedIds[0] })}

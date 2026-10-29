@@ -18,3 +18,12 @@
 .effects-stepper .bg-neutral-600 > div {
   background-color: var(--accent) !important;
 }
+/* TwinCore without WebGL: the same warm heart as a still glow. */
+.twin-core-fallback {
+  background: radial-gradient(
+    circle at 50% 50%,
+    var(--core) 0%,
+    var(--accent-glow) 18%,
+    transparent 42%
+  );
+}

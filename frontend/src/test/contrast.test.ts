@@ -40,8 +40,14 @@ const themes = [
 ];
 
 describe('WCAG AA tokens', () => {
-  it('starts in 朱砂红 and offers 海蓝 and 墨夜, even when the system is dark', () => {
-    expect(named.map((match) => match[1])).toEqual(['blue', 'ink']);
+  it('starts in 朱砂红 and offers 海蓝 and 墨夜, and 体温, 琥珀 and 月光 for the persona edition, even when the system is dark', () => {
+    expect(named.map((match) => match[1])).toEqual([
+      'blue',
+      'ink',
+      'sutai',
+      'amber',
+      'moon',
+    ]);
     expect(themes[0]).toMatchObject({
       canvas: '#fff4ea',
       accent: '#c9432c',

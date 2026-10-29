@@ -15,7 +15,7 @@ import {
 } from '../../components/ui';
 import { api } from '../../lib/api';
 import { useAuth } from '../../stores/auth';
-import { THEMES, useTheme } from '../../stores/theme';
+import { familyOf, useTheme } from '../../stores/theme';
 import { local, rememberReturn } from './returnTo';
 
 /** The ways the server signs people in (GET /api/auth/methods). */
@@ -189,7 +189,7 @@ export function Login() {
         <div className="auth-themes">
           <ThemePicker
             value={theme}
-            options={THEMES}
+            options={familyOf(theme)}
             onChange={setTheme}
             named
           />

@@ -176,7 +176,11 @@ it('logs in via email and a paste-friendly code without persisting credentials',
   });
   expect(new Headers(mutation.headers).get('X-Twin')).toBe('1');
   expect(new Headers(mutation.headers).has('X-Twin-Persona')).toBe(false);
-  expect(Object.keys(localStorage)).toEqual(['twin:persona']);
+  // Only the chosen twin and the edition's default theme, never a credential.
+  expect(Object.keys(localStorage).sort()).toEqual([
+    'twin:persona',
+    'twin:theme-default',
+  ]);
 });
 
 it('shows the waitlist without a code form or a way to try another email', async () => {

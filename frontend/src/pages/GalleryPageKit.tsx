@@ -86,7 +86,10 @@ import {
   ResizeHandle,
   type Gap,
 } from '../components/ui';
-import { THEMES, useTheme } from '../stores/theme';
+import { SUTAI_THEMES, THEMES, useTheme } from '../stores/theme';
+
+// Every palette, the team's and the persona edition's, so each can be seen here.
+const ALL_THEMES = [...THEMES, ...SUTAI_THEMES];
 
 /** The page-level kit in the gallery: everything a page is built from, with no hand-written styles. */
 export function PageKitStories({ disabled }: { disabled: boolean }) {
@@ -878,7 +881,7 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
             />
             <ThemePicker
               value={theme}
-              options={THEMES}
+              options={ALL_THEMES}
               onChange={setTheme}
               named
             />
@@ -888,7 +891,7 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
               theme={
                 <ThemePicker
                   value={theme}
-                  options={THEMES}
+                  options={ALL_THEMES}
                   onChange={setTheme}
                 />
               }

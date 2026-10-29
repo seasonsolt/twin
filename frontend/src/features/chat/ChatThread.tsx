@@ -32,7 +32,7 @@ import {
   usePersonaState as useState,
 } from '../../lib/usePersonaState';
 import { useSeesWhole } from '../../stores/access';
-import { featureOn, useAuth } from '../../stores/auth';
+import { featureOn, useAuth, usePersonaEdition } from '../../stores/auth';
 import { useStatus } from '../../stores/status';
 import type { Persona } from '../../stores/personas';
 import { askOwner } from '../answers/askOwner';
@@ -48,7 +48,13 @@ import { NoteCard } from './NoteCard';
 import { ReplyLine } from './ReplyDetails';
 import { usePinnedMessage, type ComposerLayout } from './useComposerLayout';
 import type { ChatStep, useConversation } from './useConversation';
-import { handoffText, promiseTaken, type ChatReply, type Turn } from './types';
+import {
+  handoffText,
+  promiseTaken,
+  type ChatReply,
+  type Reflection,
+  type Turn,
+} from './types';
 import type { Playback } from './usePlayback';
 
 const CHAT_ATTACHMENT_ACCEPT =
@@ -76,11 +82,12 @@ function askedBefore(turns: Turn[], index: number): string {
 
 /**
  * Whether a reply is no answer of the twin's memory, so that "how it rests on what the twin knows" is not said under
- * it: what the assistant took down, a lens's statements, what it asked colleagues, and an answer that is the team's
- * confirmed one (shown as its card).
+ * it: what the assistant took down, a lens's statements, what it asked colleagues, where help is when the message
+ * spoke of harming oneself, and an answer that is the team's confirmed one (shown as its card).
  */
 const unlabelled = (reply: ChatReply) =>
   !!reply.note ||
+  !!reply.crisis ||
   !!reply.lens ||
   !!reply.delegation ||
   (!!reply.team_answers?.length &&
@@ -105,6 +112,7 @@ export function ChatThread({
   target,
   assistant = false,
   trial,
+  reflection = 'ask',
 }: {
   active: boolean;
   chat: ReturnType<typeof useConversation>;
@@ -121,8 +129,11 @@ export function ChatThread({
   assistant?: boolean;
   /** 看同事会得到什么 on or off; given only where the person can ask it. */
   trial?: { on: boolean; onChange(on: boolean): void };
+  /** The way the person is talking with their assistant about themself, chosen beside the box. */
+  reflection?: Reflection;
 }) {
   const personaId = usePersonaId();
+  const personaEdition = usePersonaEdition();
   // The person behind a twin reads what it says in their name; theirs to know, said once under the box.
   const seen = !useSeesWhole(persona) && persona?.claimed !== false;
   // Commitments are listed in a page an administrator can switch off; where it is off, they are not spoken of either.
@@ -239,7 +250,7 @@ export function ChatThread({
     setAttachmentError('');
     void refreshState();
     pinNext.current = true;
-    void chat.send(chat.draft, !!trial?.on, lens?.id ?? null);
+    void chat.send(chat.draft, !!trial?.on, lens?.id ?? null, reflection);
   };
   // The words the assistant needs to take something down, put in the box, with the cursor after them.
   const addNote = () => {
@@ -745,7 +756,9 @@ export function ChatThread({
                 : lens
                   ? `向${lens.owner_name}的赋能提问…`
                   : assistant
-                    ? '问问我的分身，或说“记一下…”“帮我问问…”'
+                    ? personaEdition
+                      ? '问问我的分身，或说“记一下…”'
+                      : '问问我的分身，或说“记一下…”“帮我问问…”'
                     : `和${name}聊点什么…`
             }
           />

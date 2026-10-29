@@ -116,6 +116,11 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
   no embedding call. CLI and web builds pass their active settings. A third namespace, `others`, embeds what other
   speakers said to the person (`others_view`: their messages in the same view, from ready sources) so the twin can
   recall what it was told; chat shows these as others' words and never as the person's own.
+- **Reflection and the crisis guard（P1.4）**：`ChatBody.reflection: Literal["", "mirror", "free", "dream"] = ""`
+  只在 `PersonaChat(assistant=True)`（本人自己的对话）生效，追加 `persona.reflection.REFLECTION_SECTIONS` 的一段；
+  有 reflection 的一轮不写 `p_chat_log`，`promise_*` 为空。`persona.crisis.in_crisis(text)` 在 `PersonaChat.reply` /
+  `stream_reply` 的最前面和网页的 `POST /api/persona/chat`、`/chat/stream`（含附件）里各判断一次：命中时返回
+  `crisis_reply()`（固定文字，不检索、不调用模型、不写 `p_chat_log`），网页的回复另带 `"crisis": true`，排在“记一下”之前。
 - **Diary and the mirror（P1.1）**：`SourceKind.DIARY`（日记）由 `parse_diary` 读入：日期开头、后面至多几个字的行
   是一天的标题（可带 Markdown `#`），之后每段落都是本人的、带这一天的日期；日期后面是一句话（超过 12 个字或带标点）时，
   这句是当天的第一段。第一天之前单独一行的短标题不算条目。`detect_kind` 在聊天、访谈之后、文档之前识别：

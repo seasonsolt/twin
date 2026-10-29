@@ -26,6 +26,7 @@ import {
 import { useAllSessions } from '../features/chat/useAllSessions';
 import { useComposerLayout } from '../features/chat/useComposerLayout';
 import { useConversation } from '../features/chat/useConversation';
+import { REFLECTIONS, type Reflection } from '../features/chat/types';
 import { usePlayback } from '../features/chat/usePlayback';
 import { useWork } from '../features/work/useWork';
 import { WorkThread } from '../features/work/WorkThread';
@@ -35,7 +36,7 @@ import { twinMemberPath } from '../lib/members';
 import { usePersonaId, usePersonaState } from '../lib/usePersonaState';
 import { useMediaQuery, useMobile } from '../lib/useMobile';
 import { useCanManage } from '../stores/access';
-import { featureOn, useAuth } from '../stores/auth';
+import { featureOn, useAuth, usePersonaEdition } from '../stores/auth';
 import { SHEET_WIDTH, useChatLayout } from '../stores/chatLayout';
 import { usePersonas } from '../stores/personas';
 import { useStatus } from '../stores/status';
@@ -113,6 +114,8 @@ export function Chat() {
   const assistant =
     !!persona?.mine && !!persona.approved && chat.audience !== 'colleague';
   const [trialOn, setTrialOn] = usePersonaState(false);
+  const [reflection, setReflection] = usePersonaState<Reflection>('ask');
+  const personaEdition = usePersonaEdition();
   const [scope, setScope] = useState<Scope>({ kind: 'all' });
   // What makes the list ask again: a conversation written, renamed or deleted here, or a task changed.
   const revision = `${chat.written}|${(work.tasks ?? [])
@@ -504,12 +507,20 @@ export function Chat() {
           ?.title ??
         chat.conversationTitle ??
         '新对话');
+  // Where work is off, the person's own conversation has the ways of looking at themself in its place.
   const modeSwitch = workOn ? (
     <Segmented
       label="这条消息是"
       value={mode}
       options={MODES}
       onChange={setMode}
+    />
+  ) : assistant ? (
+    <Segmented
+      label="这一轮"
+      value={reflection}
+      options={REFLECTIONS}
+      onChange={setReflection}
     />
   ) : undefined;
   const speakLast = () => {
@@ -647,9 +658,13 @@ export function Chat() {
               modeSwitch={modeSwitch}
               target={picker}
               assistant={assistant}
+              // Nobody else asks a twin of the persona edition, so there is no colleague's answer to try.
               trial={
-                assistant ? { on: trialOn, onChange: setTrialOn } : undefined
+                assistant && !personaEdition
+                  ? { on: trialOn, onChange: setTrialOn }
+                  : undefined
               }
+              reflection={assistant && !workOn ? reflection : 'ask'}
             />
           )}
           {mode === 'chat' && stageOpen && (

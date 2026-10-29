@@ -52,6 +52,7 @@ from ..persona.chat import (
     search_items,
 )
 from ..persona.coverage import CHECKED_LABEL, LEVEL_LABELS, coverage_report
+from ..persona.crisis import crisis_reply, in_crisis
 from ..persona.dimensions import DIMENSION_BY_ID, DIMENSIONS, FACET_BY_ID, FACETS, TAXONOMY_VERSION
 from ..persona.items import PersonaItem, PReview
 from ..persona.kernel import KERNEL, rebuild_scope
@@ -67,6 +68,7 @@ from ..persona.profile import (
     stale_reason,
 )
 from ..persona.questionnaire import Round, round_view, save_draft, submit_initial
+from ..persona.reflection import Reflection
 from ..persona.schema import SOURCE_KIND_LABELS, ChatReply, ChatTurn, ReviewStatus, Source, SourceKind, evidence_class
 from ..persona.sources import MEMORY_KIND_LABELS, expression_view, parse_note, parse_upload
 from ..persona.store import PersonaStore, stored_identity
@@ -157,6 +159,8 @@ class ChatBody(BaseModel):
     # 看同事会得到什么: answer the last message as a colleague would be answered, and keep nothing of it. Only the
     # person themself can ask for it.
     preview: bool = False
+    # A way of talking with one's own assistant about oneself (``persona.reflection``); ignored anywhere else.
+    reflection: Reflection = ""
 
 
 class TierBody(BaseModel):
@@ -253,9 +257,11 @@ def run_chat(
     index: ConversationIndex | None = None,
     handoffs: tuple[HandoffDesk, str] | None = None,
     assistant: bool = False,
+    reflection: Reflection = "",
 ) -> dict[str, Any]:
     """``handoffs``: the desk and what the asker is called, to hand on what the reply leaves to the person.
-    ``assistant``: the conversation is the person's own with their assistant (``persona.assistant``)."""
+    ``assistant``: the conversation is the person's own with their assistant (``persona.assistant``), and
+    ``reflection`` the way they are talking with it (``persona.reflection``)."""
     with PersonaStore(settings.db_path) as store:
         log("检索档案并作答")
         # The ledger is the person's own: only a conversation of the tier that may use everything has it.
@@ -269,6 +275,7 @@ def run_chat(
             reach=handoffs[0].reach(email) if handoffs else "none",
             assistant=assistant,
             asker=chat_asker(handoffs[0], email, handoffs[1]) if handoffs else None,
+            reflection=reflection,
         )
         owner_said = store.owner_replies(conversation_id, email) if conversation_id else []
         # Team answers that match the question are shown as cards of their own; the twin is told so.
@@ -1081,6 +1088,10 @@ def register(
         audience = index.audience(body.conversation_id, request_audience(request))
         asker = (desk, request_asker_name(request))
         with open_store() as store:
+            if in_crisis(messages[-1].content):
+                append_user(store, body.conversation_id, email, messages[-1].content, index)
+                payload = {**chat_payload(store, crisis_reply(), audience=audience), "crisis": True}
+                return JSONResponse(append_reply(store, body.conversation_id, email, payload, index), status_code=200)
             if not store.has_items():
                 append_user(store, body.conversation_id, email, messages[-1].content, index)
                 reply = no_profile_reply(store)
@@ -1109,10 +1120,41 @@ def register(
                 index,
                 asker,
                 audience == SELF and bool(request.scope.get("twin_person")),
+                body.reflection,
             ),
             prepare=accept,
         )
         return {"job_id": job.job_id}
+
+    def crisis_response(message: str, body: ChatBody, email: str | None, audience: Audience) -> StreamingResponse:
+        """The message speaks of ending one's life or harming oneself (``persona.crisis``): the conversation stops
+        with the fixed reply that says where help is. No model is asked, so nothing can delay or change it; a trial
+        question keeps nothing, as always."""
+
+        def keep() -> dict[str, Any]:
+            with open_store() as store:
+                payload = {**chat_payload(store, crisis_reply(), audience=audience), "crisis": True}
+                payload["completed_at"] = dt.datetime.now(dt.UTC).isoformat(timespec="milliseconds")
+                if body.preview:
+                    return payload
+                append_user(store, body.conversation_id, email, message, index)
+                return append_reply(store, body.conversation_id, email, payload, index)
+
+        async def events() -> AsyncGenerator[str]:
+            yield ": connected\n\n"
+            try:
+                final = await off_loop(keep)
+            except HTTPException as e:
+                yield sse_event("error", {"detail": str(e.detail)})
+                return
+            yield sse_event("delta", {"text": final["reply"]})
+            yield sse_event("final", final)
+
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     def note_response(note: str, message: str, body: ChatBody, email: str | None) -> StreamingResponse:
         """The person asked the assistant to remember something (``记一下``): it is kept as a note, in the tier that is
@@ -1243,6 +1285,9 @@ def register(
             # 看同事会得到什么: the last message alone, answered from the colleague tier, with nothing saved.
             person_only(request)
             audience, ledger, messages = COLLEAGUE, False, messages[-1:]
+        # Before anything else, whoever asks: a message of ending one's life or harming oneself stops here.
+        if in_crisis(messages[-1].content):
+            return crisis_response(messages[-1].content, body, email, audience)
         # The person's own conversation is answered by their assistant, which also takes down notes and promises.
         assistant = audience == SELF and bool(request.scope.get("twin_person")) and not preview
         if assistant and not attachment_passages and (note := note_text(messages[-1].content)) is not None:
@@ -1330,6 +1375,7 @@ def register(
                             assistant=assistant,
                             # 看同事会得到什么 is asked by nobody in particular.
                             asker=None if preview else chat_asker(desk, email, asker_name),
+                            reflection=body.reflection,
                         )
                     )
                     # What the person answered themself in this conversation settles it; read here, from what the

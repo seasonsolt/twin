@@ -82,6 +82,7 @@ function mount(
   items: Persona[] = personas,
   entry = '/chat',
   features: { work: boolean; ledger?: boolean } = { work: true },
+  edition: 'persona' | 'team' = 'team',
 ) {
   useAuth.setState({
     identity: {
@@ -89,6 +90,7 @@ function mount(
       admin: false,
       auth_enabled: true,
       features,
+      edition,
     },
   });
   usePersonas.setState({
@@ -1031,4 +1033,53 @@ it('leads the top bar with the face of whom the conversation is with, the person
     'src',
     '/api/personas/default/avatar?persona=default',
   );
+});
+
+it('lets the person look at themself instead of asking in their own conversation, where work is off', async () => {
+  const person = userEvent.setup();
+  streamed.push(answer({ reply: '你 3 月说过想留下一个书房。你怎么看？' }));
+  mount(personas, '/chat', { work: false });
+  await list();
+  await screen.findByText('仅你可见');
+  const ways = screen.getByRole('radiogroup', { name: '这一轮' });
+  expect(
+    within(ways)
+      .getAllByRole('radio')
+      .map((way) => way.textContent),
+  ).toEqual(['问答', '照镜子', '随便说', '记梦']);
+  await person.click(within(ways).getByRole('radio', { name: '照镜子' }));
+  await person.type(
+    screen.getByRole('textbox', { name: '你说' }),
+    '我为什么总想留下点什么',
+  );
+  await person.click(screen.getByRole('button', { name: '发送' }));
+  expect(
+    await screen.findByText('你 3 月说过想留下一个书房。你怎么看？'),
+  ).toBeVisible();
+  expect(bodyOf('/api/persona/chat/stream')[0]).toMatchObject({
+    reflection: 'mirror',
+  });
+});
+
+it('in the persona edition offers no colleague’s answer to try, and says where help is with no word on how it answered', async () => {
+  const person = userEvent.setup();
+  streamed.push(
+    answer({
+      reply: '听到你这样说，我很在意你现在的安全。',
+      crisis: true,
+      mode: 'general',
+    }),
+  );
+  mount(personas, '/chat', { work: false }, 'persona');
+  await list();
+  await screen.findByText('仅你可见');
+  const box = screen.getByRole('textbox', { name: '你说' });
+  expect(box).toHaveAttribute('placeholder', '问问我的分身，或说“记一下…”');
+  expect(screen.queryByRole('button', { name: '试问' })).toBeNull();
+  await person.type(box, '我不想活了');
+  await person.click(screen.getByRole('button', { name: '发送' }));
+  expect(
+    await screen.findByText('听到你这样说，我很在意你现在的安全。'),
+  ).toBeVisible();
+  expect(screen.queryByText('通用回答')).toBeNull();
 });

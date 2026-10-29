@@ -282,10 +282,16 @@ class Personas:
         """Where a twin's database is, without reading anything of it."""
         return self._settings(persona_id, read_name=False).db_path
 
+    def alone(self, identity: dict[str, Any]) -> bool:
+        """The persona edition without sign-in: one person's own twins on their own computer, so whoever uses them is
+        the person they are made for. Without sign-in elsewhere nobody is known to be anyone's person."""
+        return not identity.get("auth_enabled") and self.settings.product.edition == "persona"
+
     def own_twins(self, identity: dict[str, Any]) -> list[dict[str, Any]]:
-        """The twins the signed-in person is the person of: made for them, taken by them and said to be all right.
-        None without accounts, where nobody is known to be the person."""
-        if not identity.get("auth_enabled"):
+        """The twins the signed-in person is the person of: made for them, taken by them and said to be all right;
+        every live twin when they are ``alone``. None without accounts elsewhere, where nobody is known to be the
+        person."""
+        if not identity.get("auth_enabled") and not self.alone(identity):
             return []
         with self.lock:
             return [
@@ -399,7 +405,9 @@ class Personas:
         taken it; the
         person sees that it is theirs and whether they have said it is all right."""
         view: dict[str, Any] = {}
-        if entry.get("member") and entry["member"] == identity["email"]:
+        if self.alone(identity):
+            view.update(mine=True, approved=True, made_by_other=False, from_meetings=False)
+        elif entry.get("member") and entry["member"] == identity["email"]:
             view["mine"] = True
             view["approved"] = bool(entry.get("approved_at"))
             view["made_by_other"] = entry.get("owner") != identity["email"]
@@ -877,7 +885,9 @@ class PersonaMiddleware:
                     return None
             context = registry.application(persona_id)
             scope["twin_audience"] = registry.audience(registry.entry(persona_id), identity)
-            # The person the twin is made for, known to be who is asking: only where there are accounts to know it by.
-            scope["twin_person"] = bool(identity.get("auth_enabled")) and scope["twin_audience"] == SELF
+            # The person the twin is made for, known to be who is asking (``alone``, or by their account).
+            scope["twin_person"] = (registry.alone(identity) or bool(identity.get("auth_enabled"))) and scope[
+                "twin_audience"
+            ] == SELF
             registry.enter(persona_id)
             return context, persona_id

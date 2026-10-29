@@ -1,4 +1,5 @@
 import { useId, useState } from 'react';
+import { useNavigate } from 'react-router';
 import { usePersonaEdition } from '../../stores/auth';
 import {
   ActionMenu,
@@ -20,6 +21,23 @@ import {
   type ReviewStatus,
   type Tier,
 } from './types';
+
+// How many of a memory's own words go along into 照镜子.
+const MIRROR_QUOTES = 4;
+
+/** What the person brings into 照镜子 from a memory whose evidence disagrees: the memory, where it disagrees, and
+ * the words on both sides, dated, for the twin to hold up to them. */
+export function mirrorDraft(item: ProfileItem): string {
+  const quotes = item.evidence
+    .filter((evidence) => evidence.quote)
+    .slice(0, MIRROR_QUOTES)
+    .map((evidence) => `- ${evidence.date ?? '没有日期'}：${evidence.quote}`);
+  return [
+    `我想看看这两种说法：${item.statement}`,
+    `不一致的地方：${item.conflict}`,
+    ...(quotes.length ? ['原话：', ...quotes] : []),
+  ].join('\n');
+}
 
 /**
  * What the twin remembers, as one line: the memory, when it applies and how many occasions it rests on. 改 opens
@@ -46,6 +64,16 @@ export function ItemRow({
   // The persona edition has no colleagues: no memory is marked private, and none is opened to them.
   const persona = usePersonaEdition();
   const onTier = persona ? undefined : chooseTier;
+  // Where the two sides of a memory disagree, the person can look at them in 照镜子 (P1.5), in a conversation of
+  // its own with their twin. Only the person can choose a tier, so only they are offered it.
+  const navigate = useNavigate();
+  const mirror =
+    persona && chooseTier && item.conflict
+      ? () =>
+          navigate('/chat', {
+            state: { ask: mirrorDraft(item), reflection: 'mirror' },
+          })
+      : undefined;
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(item.statement);
   const [open, setOpen] = useState(false);
@@ -99,6 +127,7 @@ export function ItemRow({
                   label: open ? '收起依据' : '依据',
                   onSelect: () => setOpen(!open),
                 },
+                ...(mirror ? [{ label: '照镜子', onSelect: mirror }] : []),
                 {
                   label: '删掉',
                   danger: true,

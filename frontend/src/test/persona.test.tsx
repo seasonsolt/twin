@@ -7,7 +7,7 @@ import {
   within,
 } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 
 vi.mock('motion/react', async (original) => ({
   ...(await original<typeof import('motion/react')>()),
@@ -16,6 +16,7 @@ vi.mock('motion/react', async (original) => ({
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ItemCard } from '../features/profile/ItemCard';
 import { Overview } from '../features/profile/Overview';
+import { mirrorDraft } from '../features/profile/ItemRow';
 import { setPersonaId } from '../lib/persona';
 import { useAuth } from '../stores/auth';
 import { usePersonas } from '../stores/personas';
@@ -1025,4 +1026,61 @@ it('marks a memory only the person may use on the card the graph opens, and lets
     />,
   );
   expect(screen.queryByRole('button', { name: /设为/u })).toBeNull();
+});
+
+it('takes the person from a memory whose two sides disagree into 照镜子 with the words of both, in the persona edition', async () => {
+  useAuth.setState({
+    identity: {
+      email: null,
+      admin: true,
+      auth_enabled: false,
+      features: { work: false },
+      edition: 'persona',
+    },
+  });
+  const said = {
+    ...item,
+    item_id: 'a',
+    statement: '说要早睡',
+    conflict: '常常凌晨还在写',
+    evidence: [
+      { ...item.evidence[0], quote: '我以后十一点就睡', date: '2026-03-02' },
+      { ...item.evidence[0], expression_id: 'e2', quote: '又写到两点' },
+    ],
+  };
+  rows = [said, { ...item, item_id: 'b', statement: '工作上的做法' }];
+  let arrived: unknown = null;
+  function ChatAt() {
+    arrived = useLocation().state;
+    return <p>对话</p>;
+  }
+  render(
+    <MemoryRouter>
+      <ConfirmProvider>
+        <Routes>
+          <Route path="/" element={<Overview />} />
+          <Route path="/chat" element={<ChatAt />} />
+        </Routes>
+      </ConfirmProvider>
+    </MemoryRouter>,
+  );
+  await cards(2);
+  const card = (name: string) => within(screen.getByRole('article', { name }));
+  // Only a memory that disagrees is offered it.
+  expect(
+    card('工作上的做法').queryByRole('button', {
+      name: '照镜子',
+      hidden: true,
+    }),
+  ).toBeNull();
+  await choose(card('说要早睡'), '照镜子');
+  expect(await screen.findByText('对话')).toBeVisible();
+  expect(arrived).toEqual({ ask: mirrorDraft(said), reflection: 'mirror' });
+  expect(mirrorDraft(said).split('\n')).toEqual([
+    '我想看看这两种说法：说要早睡',
+    '不一致的地方：常常凌晨还在写',
+    '原话：',
+    '- 2026-03-02：我以后十一点就睡',
+    '- 没有日期：又写到两点',
+  ]);
 });

@@ -80,7 +80,7 @@ const bodyOf = (url: string, method?: string) =>
 
 function mount(
   items: Persona[] = personas,
-  entry = '/chat',
+  entry: string | { pathname: string; state: unknown } = '/chat',
   features: { work: boolean; ledger?: boolean } = { work: true },
   edition: 'persona' | 'team' = 'team',
 ) {
@@ -1082,4 +1082,36 @@ it('in the persona edition offers no colleague’s answer to try, and says where
     await screen.findByText('听到你这样说，我很在意你现在的安全。'),
   ).toBeVisible();
   expect(screen.queryByText('通用回答')).toBeNull();
+});
+
+it('opens 照镜子 in a new conversation with the two sides of a memory waiting to be sent', async () => {
+  const person = userEvent.setup();
+  streamed.push(
+    answer({ reply: '你 3 月说想早睡，4 月三次凌晨还在写。你怎么看？' }),
+  );
+  const draft = '我想看看这两种说法：他说要早睡\n不一致的地方：常常熬夜';
+  mount(
+    personas,
+    { pathname: '/chat', state: { ask: draft, reflection: 'mirror' } },
+    { work: false },
+    'persona',
+  );
+  await list();
+  await screen.findByText('仅你可见');
+  const box = screen.getByRole('textbox', { name: '你说' });
+  await waitFor(() => expect(box).toHaveValue(draft));
+  expect(
+    within(screen.getByRole('radiogroup', { name: '这一轮' })).getByRole(
+      'radio',
+      { name: '照镜子' },
+    ),
+  ).toBeChecked();
+  await person.click(screen.getByRole('button', { name: '发送' }));
+  expect(
+    await screen.findByText('你 3 月说想早睡，4 月三次凌晨还在写。你怎么看？'),
+  ).toBeVisible();
+  expect(bodyOf('/api/persona/chat/stream')[0]).toMatchObject({
+    reflection: 'mirror',
+    messages: [{ role: 'user', content: draft }],
+  });
 });

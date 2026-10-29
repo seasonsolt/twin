@@ -76,12 +76,14 @@ export function Chat() {
   const mode: Mode = workOn && params.get('mode') === 'task' ? 'work' : 'chat';
   const chat = useConversation(active);
   const work = useWork(workOn && active);
-  // A question picked elsewhere (such as trying out a twin before saying it is all right) waits in the composer.
-  const ask = (state as { ask?: unknown } | null)?.ask;
+  // A question picked elsewhere (such as trying out a twin before saying it is all right) waits in the composer. One
+  // brought with a way of talking (照镜子 from a memory whose two sides disagree) waits in a new conversation, in it.
+  const asked = state as { ask?: unknown; reflection?: unknown } | null;
+  const ask = asked?.ask;
+  const askedReflection = REFLECTIONS.find(
+    (r) => r.id === asked?.reflection,
+  )?.id;
   const { setDraft } = chat;
-  useEffect(() => {
-    if (typeof ask === 'string') setDraft(ask);
-  }, [ask, key, setDraft]);
   const mobile = useMobile();
   const wide = useMediaQuery('(min-width: 1280px)');
   const layout = useChatLayout();
@@ -115,6 +117,17 @@ export function Chat() {
     !!persona?.mine && !!persona.approved && chat.audience !== 'colleague';
   const [trialOn, setTrialOn] = usePersonaState(false);
   const [reflection, setReflection] = usePersonaState<Reflection>('ask');
+  const placed = useRef<string | null>(null);
+  const clearChat = chat.clear;
+  useEffect(() => {
+    if (typeof ask !== 'string' || placed.current === key) return;
+    placed.current = key;
+    if (askedReflection) {
+      clearChat();
+      setReflection(askedReflection);
+    }
+    setDraft(ask);
+  }, [ask, askedReflection, key, clearChat, setDraft, setReflection]);
   const personaEdition = usePersonaEdition();
   const [scope, setScope] = useState<Scope>({ kind: 'all' });
   // What makes the list ask again: a conversation written, renamed or deleted here, or a task changed.

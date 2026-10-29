@@ -587,6 +587,16 @@
   max-width: 1120px;
   margin-inline: auto;
 }
+/* 素体: the persona edition's own pages (记忆, 资料) sit in a glow of the theme, as its chat does. */
+.app-shell:has(.profile-page[data-look='sutai']) {
+  background: radial-gradient(
+      ellipse 60% 45% at 55% 0%,
+      var(--glow-bg) 0%,
+      transparent 70%
+    )
+    var(--canvas);
+  background-attachment: fixed;
+}
 .memory-graph-panel {
   display: flex;
   flex-direction: column;

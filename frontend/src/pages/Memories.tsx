@@ -8,6 +8,7 @@ import { Check, MoreHorizontal, Plus, Video, AudioLines } from 'lucide-react';
 import { StageHeader } from '../components/layout/StageHeader';
 import { useMobile } from '../lib/useMobile';
 import { MessageList } from '../components/effects/MessageList';
+import { TwinCore } from '../components/effects';
 import {
   BuildProgress,
   INDEX_STAGE,
@@ -24,6 +25,8 @@ import {
   Heading,
   IconButton,
   Skeleton,
+  SourceObject,
+  Stack,
   Tabs,
   Text,
   Textarea,
@@ -41,7 +44,7 @@ import {
 import { usePendingWork } from '../lib/pendingWork';
 import { useStatus, type KernelStatus } from '../stores/status';
 import { usePersonas } from '../stores/personas';
-import { useAuth } from '../stores/auth';
+import { useAuth, usePersonaEdition } from '../stores/auth';
 import { MediaClaim } from '../features/sources/MediaClaim';
 import { TranscriptClaim } from '../features/sources/TranscriptClaim';
 import { useOpenSettings } from '../features/settings/Settings';
@@ -285,6 +288,9 @@ export function Memories({
   const [loadingMore, setLoadingMore] = useState(false);
   const [processing, setProcessing] = useState<Processing>({ state: 'idle' });
   const admin = useAuth((state) => state.identity?.admin ?? false);
+  // On the persona edition's own page, 资料 is 素体: what is added goes into the twin's core, and each piece is shown
+  // as the thing it is.
+  const sutai = usePersonaEdition() && profile && !embedded;
   const kernel = useStatus((state) => state.data?.kernel);
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
@@ -887,7 +893,20 @@ export function Memories({
             aria-label="添加记忆"
             aria-busy={busy}
           >
-            <Card>{addContent}</Card>
+            {sutai ? (
+              <Card variant="glass">
+                <Stack gap={4}>
+                  <TwinCore
+                    pulse={summary.total}
+                    label="分身的心核"
+                    className="h-40 w-full"
+                  />
+                  <div className="min-w-0">{addContent}</div>
+                </Stack>
+              </Card>
+            ) : (
+              <Card>{addContent}</Card>
+            )}
           </section>
         )}
         {(!mobile || !adding) && progressUI}
@@ -935,15 +954,23 @@ export function Memories({
                     <Card
                       as="article"
                       padding="md"
+                      variant={sutai ? 'glass' : undefined}
                       aria-busy={mediaPending(memory) || memoryPending(memory)}
                       className={`memory-card flex items-start justify-between gap-2 ${mediaPending(memory) || memoryPending(memory) ? 'opacity-60' : ''}`}
                     >
+                      {/* A phone keeps the card's width for its words. */}
+                      {sutai && !mobile && (
+                        <SourceObject
+                          kind={memory.kind}
+                          label={memory.detected_kind_label}
+                        />
+                      )}
                       <div className="min-w-0 flex-1">
                         <h3 className="flex items-center gap-2 font-medium">
-                          {memory.kind === 'video' && (
+                          {(!sutai || mobile) && memory.kind === 'video' && (
                             <Video size={18} aria-label="视频" />
                           )}
-                          {memory.kind === 'audio' && (
+                          {(!sutai || mobile) && memory.kind === 'audio' && (
                             <AudioLines size={18} aria-label="音频" />
                           )}
                           <span className="truncate">{memory.title}</span>

@@ -688,3 +688,37 @@ it('says when a memory was added, with the year only when it is not this one', (
   expect(addedOn(undefined, now)).toBeNull();
   expect(addedOn('not a date', now)).toBeNull();
 });
+
+it("shows each piece as the thing it is, under the twin's core, on the persona edition's own page", async () => {
+  useAuth.setState({
+    identity: {
+      email: null,
+      admin: true,
+      auth_enabled: false,
+      edition: 'persona',
+    },
+  });
+  try {
+    render(
+      <ConfirmProvider>
+        <MemoryRouter initialEntries={['/team/twin/default']}>
+          <Memories profile />
+        </MemoryRouter>
+      </ConfirmProvider>,
+    );
+    await loaded();
+    expect(screen.getByRole('img', { name: '分身的心核' })).toBeVisible();
+    expect(
+      within(screen.getByRole('article')).getByRole('img', { name: '文档' }),
+    ).toBeInTheDocument();
+  } finally {
+    useAuth.setState({ identity: null });
+  }
+});
+
+it('keeps the team edition’s cards without a core or objects', async () => {
+  mount();
+  await loaded();
+  expect(screen.queryByRole('img', { name: '分身的心核' })).toBeNull();
+  expect(screen.queryByRole('img', { name: '文档' })).toBeNull();
+});

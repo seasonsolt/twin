@@ -1,6 +1,17 @@
 import { useId, type ComponentProps, type ReactNode } from 'react';
 import { motion } from 'motion/react';
 import { NavLink } from 'react-router';
+import {
+  AudioLines,
+  BookOpen,
+  ClipboardList,
+  FileText,
+  MessagesSquare,
+  Mic,
+  PenLine,
+  Video,
+  type LucideIcon,
+} from 'lucide-react';
 import { useMotionPreset } from '../../design/motion';
 import { cn } from '../../lib/utils';
 
@@ -169,5 +180,38 @@ export function RiseText({
     >
       {children}
     </Tag>
+  );
+}
+
+const OBJECTS: Record<string, LucideIcon> = {
+  diary: BookOpen,
+  chat: MessagesSquare,
+  questionnaire: ClipboardList,
+  interview: Mic,
+  video: Video,
+  audio: AudioLines,
+  document: FileText,
+};
+
+/**
+ * What a piece of material is, as the thing itself: a diary, a chat, a recording, a page. A note the person wrote here
+ * (labelled 笔记) is a pen whatever kind it was read as.
+ */
+export function SourceObject({
+  kind,
+  label,
+}: {
+  kind?: string;
+  label?: string;
+}) {
+  const Icon = label === '笔记' ? PenLine : (OBJECTS[kind ?? ''] ?? FileText);
+  return (
+    <span
+      role="img"
+      aria-label={label || '资料'}
+      className="grid size-11 shrink-0 place-items-center rounded-full border border-glass-line bg-glass text-primary shadow-glass"
+    >
+      <Icon size={20} aria-hidden />
+    </span>
   );
 }

@@ -1026,3 +1026,30 @@ it('marks a memory only the person may use on the card the graph opens, and lets
   );
   expect(screen.queryByRole('button', { name: /设为/u })).toBeNull();
 });
+
+it('draws the ten aspects as a constellation around the twin in the persona edition, in place of the ring', async () => {
+  rows = [...dimensionItems('D2', 7), ...dimensionItems('D3', 1)];
+  useAuth.setState({
+    identity: {
+      email: null,
+      admin: true,
+      auth_enabled: false,
+      edition: 'persona',
+    },
+  });
+  try {
+    mountOverview();
+    expect(
+      await screen.findByRole('img', { name: '十个方面的星图，已了解 2 个' }),
+    ).toBeVisible();
+    expect(screen.getByText('2/10 个方面')).toBeVisible();
+    expect(screen.queryByRole('img', { name: /十个方面里已了解/u })).toBeNull();
+    // The list still chooses, beside it.
+    expect(screen.getByRole('tab', { name: /^看重什么 7/u })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+  } finally {
+    useAuth.setState({ identity: null });
+  }
+});

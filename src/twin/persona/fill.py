@@ -55,6 +55,9 @@ class Ask:
     level: int
     # The tier a conclusion of this facet starts in.
     tier: Tier
+    # Other facets the answer is likely about, read along with this one though the person did not open them
+    # (人生回顾's questions, ``persona.life_review``).
+    also: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -152,7 +155,7 @@ def draft(store: PersonaStore, llm: LLM, settings: Settings, name: str, ask: Ask
     shown = [
         e.model_copy(update={"text": view.mask(e.text), "context": view.mask(e.context)}) for e in parsed.expressions
     ]
-    allowed = consented_facets(store) | {ask.facet_id}
+    allowed = consented_facets(store) | {ask.facet_id, *ask.also}
     named = settings.model_copy(update={"target_name": name})
     drafts: list[Draft] = []
     seen: set[str] = set()

@@ -1,6 +1,7 @@
 """Web routes of 补一补 (``/api/persona/fill...``): the questions to answer next, an answer read into draft memories,
 what keeping them is worth, and keeping them in the tier the person chose (see ``persona.fill``). For the person alone:
-what they keep is their own words."""
+what they keep is their own words. 人生回顾 (``/api/persona/life-review...``, see ``persona.life_review``) asks its own
+questions stage by stage and goes on through the same draft, preview and keep."""
 
 from __future__ import annotations
 
@@ -13,8 +14,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..config import Settings
 from ..llm import LLMError
-from ..persona import fill
-from ..persona.coverage import LEVEL_LABELS
+from ..persona import fill, life_review
+from ..persona.coverage import LEVEL_LABELS, coverage_report
 from ..persona.dimensions import FACET_BY_ID
 from ..persona.profile import consented_facets
 from ..persona.questionnaire import QUESTIONS
@@ -31,6 +32,11 @@ class AskBody(BaseModel):
     # The question, and the facet it is asked for.
     question: str = Field(min_length=1, max_length=8)
     facet: FacetId
+
+
+class SkipBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    question: str = Field(min_length=1, max_length=8)
 
 
 class DraftBody(AskBody):
@@ -57,6 +63,22 @@ def register(
     open_store: Callable[[], AbstractContextManager[PersonaStore]],
 ) -> None:
     def ask_of(body: AskBody) -> fill.Ask:
+        life = life_review.QUESTION_BY_ID.get(body.question)
+        if life is not None:
+            if body.facet not in life.facets:
+                raise HTTPException(404, "找不到这个问题")
+            facet = FACET_BY_ID[body.facet]
+            also = tuple(f for f in life.facets if f != facet.facet_id)
+            return fill.Ask(
+                life.question_id,
+                life.text,
+                facet.facet_id,
+                facet.name,
+                facet.dimension_id,
+                0,
+                default_tier(facet.facet_id),
+                also,
+            )
         question = next((q for q in QUESTIONS if q.qid == body.question), None)
         if question is None or body.facet not in FACET_BY_ID:
             raise HTTPException(404, "找不到这个问题")
@@ -169,6 +191,45 @@ def register(
         with lock, open_store() as store:
             stored = fill.keep(store, ask, name, kept)
             expected = worth(store, ask, kept)
+            # A question of 人生回顾 that was answered and looked at is not asked again, whatever was kept of it.
+            life_review.mark(store, ask.question_id, answered=True)
         if stored:
             queue_build()
         return {"saved": len(stored), "changes": expected}
+
+    @app.get("/api/persona/life-review")
+    def life_questions(request: Request) -> dict[str, Any]:
+        """人生回顾: the next questions, of the earliest stage of the person's life not yet told, and how far each stage
+        has been told."""
+        person(request)
+        with open_store() as store:
+            state = life_review.load_state(store)
+            report = coverage_report(store.list_items(), consented_facets(store), demand=store.chat_demand())
+        levels = {f.facet_id: f.level for f in report.facets}
+        return {
+            "questions": [
+                {
+                    "id": q.question_id,
+                    "text": q.text,
+                    "facet": q.facets[0],
+                    "facet_name": FACET_BY_ID[q.facets[0]].name,
+                    "level": levels.get(q.facets[0], 0),
+                    "level_label": LEVEL_LABELS[levels.get(q.facets[0], 0)],
+                    "tier": default_tier(q.facets[0]),
+                    "stage": q.stage,
+                    "stage_label": life_review.STAGE_LABELS[q.stage],
+                }
+                for q in life_review.next_questions(state)
+            ],
+            "stages": life_review.progress(state),
+        }
+
+    @app.post("/api/persona/life-review/skip")
+    def skip_life_question(body: SkipBody, request: Request) -> dict[str, Any]:
+        """Pass a question over: it is asked again once every other has been."""
+        person(request)
+        if body.question not in life_review.QUESTION_BY_ID:
+            raise HTTPException(404, "找不到这个问题")
+        with lock, open_store() as store:
+            state = life_review.mark(store, body.question, answered=False)
+        return {"stages": life_review.progress(state)}

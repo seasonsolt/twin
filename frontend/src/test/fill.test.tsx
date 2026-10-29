@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { TooltipProvider } from '../components/ui';
 import { FillDialog } from '../features/fill/FillDialog';
+import { useAuth } from '../stores/auth';
 
 vi.mock('motion/react', async (original) => ({
   ...(await original<typeof import('motion/react')>()),
@@ -303,4 +304,104 @@ it('asks about the aspect shown as wanting more when what the twin knows least h
     </TooltipProvider>,
   );
   expect(await screen.findByText('平时有什么爱好？')).toBeInTheDocument();
+});
+
+it('in the persona edition asks about the person’s life stage by stage, keeps it only for them, and remembers what was passed over', async () => {
+  const user = userEvent.setup();
+  useAuth.setState({
+    identity: {
+      email: 'me@example.com',
+      admin: false,
+      auth_enabled: false,
+      features: { work: false },
+      edition: 'persona',
+    },
+  });
+  const childhood = (id: string, text: string) => ({
+    id,
+    text,
+    facet: '1.3',
+    facet_name: '常讲的经历与故事',
+    level: 0,
+    level_label: '还不了解',
+    stage: 'childhood',
+    stage_label: '童年',
+  });
+  const sent: { url: string; body: unknown }[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      sent.push({
+        url,
+        body: typeof init?.body === 'string' ? JSON.parse(init.body) : null,
+      });
+      if (url === '/api/persona/life-review')
+        return json({
+          questions: [
+            childhood('L01', '你记得的最早的一件事是什么？'),
+            childhood('L02', '小时候家里是什么样的？'),
+          ],
+          stages: [{ id: 'childhood', label: '童年', answered: 0, total: 3 }],
+        });
+      if (url === '/api/persona/fill/draft')
+        return json({
+          drafts: [
+            {
+              facet: '1.3',
+              facet_name: '常讲的经历与故事',
+              statement: '最早的记忆是外婆家的院子',
+              tier: 'colleague',
+            },
+          ],
+          changes: [],
+        });
+      if (url === '/api/persona/fill/keep') return json({ saved: 1 });
+      return json({});
+    }),
+  );
+  const onKept = vi.fn();
+  render(
+    <TooltipProvider>
+      <FillDialog
+        open
+        onOpenChange={vi.fn()}
+        scope={{ life: true }}
+        onKept={onKept}
+      />
+    </TooltipProvider>,
+  );
+  const dialog = await screen.findByRole('dialog', { name: '回顾人生' });
+  await waitFor(() =>
+    expect(
+      within(dialog).getByText('你记得的最早的一件事是什么？'),
+    ).toBeVisible(),
+  );
+  expect(within(dialog).getByText('童年 · 0/3')).toBeInTheDocument();
+  await user.type(within(dialog).getByLabelText('你的回答'), '外婆家的院子');
+  await user.click(within(dialog).getByRole('button', { name: '整理' }));
+  // No colleagues to share it with: kept for the person, or not at all.
+  const tiers = await within(dialog).findByRole('radiogroup', {
+    name: '谁能用这条',
+  });
+  expect(within(tiers).queryByText('同事能用')).not.toBeInTheDocument();
+  expect(within(tiers).getByRole('radio', { name: '只有我' })).toBeChecked();
+  await user.click(within(dialog).getByRole('button', { name: '存进记忆' }));
+  expect(
+    await within(dialog).findByText('小时候家里是什么样的？'),
+  ).toBeInTheDocument();
+  expect(within(dialog).getByText('童年 · 1/3')).toBeInTheDocument();
+  expect(sent.find((c) => c.url === '/api/persona/fill/keep')?.body).toEqual({
+    question: 'L01',
+    facet: '1.3',
+    items: [
+      { facet: '1.3', statement: '最早的记忆是外婆家的院子', choice: 'self' },
+    ],
+  });
+  // Passed over, the question is remembered so it comes back after the others.
+  await user.click(within(dialog).getByRole('button', { name: '跳过' }));
+  await waitFor(() => expect(onKept).toHaveBeenCalled());
+  expect(
+    sent.find((c) => c.url === '/api/persona/life-review/skip')?.body,
+  ).toEqual({ question: 'L02' });
+  useAuth.setState({ identity: null });
 });

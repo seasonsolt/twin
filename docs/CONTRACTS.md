@@ -121,6 +121,11 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
   有 reflection 的一轮不写 `p_chat_log`，`promise_*` 为空。`persona.crisis.in_crisis(text)` 在 `PersonaChat.reply` /
   `stream_reply` 的最前面和网页的 `POST /api/persona/chat`、`/chat/stream`（含附件）里各判断一次：命中时返回
   `crisis_reply()`（固定文字，不检索、不调用模型、不写 `p_chat_log`），网页的回复另带 `"crisis": true`，排在“记一下”之前。
+- **Life review（P1.3）**：`GET /api/persona/life-review` → `{questions: [{id, text, facet, facet_name, level,
+  level_label, tier, stage, stage_label}], stages: [{id, label, answered, total}]}`；`POST /api/persona/life-review/skip`
+  `{question}` → `{stages}`。题号是 `persona.life_review.QUESTIONS` 的 `L01`–`L14`，`POST /api/persona/fill/draft` /
+  `preview` / `keep` 也接受，`facet` 必须是这一题标的细项之一；`keep` 之后这一题记为答过。进度在 `p_meta`
+  的 `life_review:state`（`{answered, skipped}`）。都只给本人（`person(request)`）。
 - **Diary and the mirror（P1.1）**：`SourceKind.DIARY`（日记）由 `parse_diary` 读入：日期开头、后面至多几个字的行
   是一天的标题（可带 Markdown `#`），之后每段落都是本人的、带这一天的日期；日期后面是一句话（超过 12 个字或带标点）时，
   这句是当天的第一段。第一天之前单独一行的短标题不算条目。`detect_kind` 在聊天、访谈之后、文档之前识别：

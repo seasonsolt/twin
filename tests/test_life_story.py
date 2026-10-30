@@ -95,6 +95,13 @@ def test_the_years_run_to_this_one_with_each_gap_kept_as_one_blank() -> None:
     assert life_story.story([GRANNY, HABIT], TODAY) == ([], [life_story.place(GRANNY, TODAY)])
 
 
+def test_a_conversation_can_look_back_to_the_first_year_anything_was_said_as_of() -> None:
+    # Told looking back, a year in the words is not a year the twin knew anything as of: only the dates of the words.
+    assert life_story.known_since([QUIT, GRANNY, PROUD]) == 2021
+    assert life_story.known_since([QUIT, FATHER, HABIT]) == 2018
+    assert life_story.known_since([FATHER]) is None
+
+
 @pytest.fixture
 def web(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     monkeypatch.setenv("TWIN_SMTP_PASSWORD", "test-only")
@@ -149,6 +156,8 @@ def test_the_person_alone_sees_their_life_by_year(web: TestClient, tmp_path: Pat
     assert [(y["year"], y["until"], len(y["items"])) for y in years[1:3]] == [(2016, 2018, 0), (2019, 2019, 1)]
     assert years[-1]["until"] == dt.date.today().year
     assert [i["item_id"] for i in told.json()["undated"]] == ["pi_granny"]
+    # The first year a conversation can look back to: the earliest dated words of any memory, of the story or not.
+    assert told.json()["since"] == 2018
 
     login(web, OTHER)
     assert web.get("/api/persona/life-story", headers={**CSRF, "X-Twin-Persona": persona}).status_code == 403

@@ -258,4 +258,6 @@ def register(
         return {
             "years": [{"year": s.year, "until": s.until, "items": [view(p) for p in s.items]} for s in spans],
             "undated": [view(p) for p in undated],
+            # The first year a conversation can look back to (时间切片): before it, nothing is known as of then.
+            "since": life_story.known_since(items),
         }

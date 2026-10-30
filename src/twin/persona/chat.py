@@ -757,6 +757,22 @@ def no_profile_reply(store: PersonaStore, as_of: dt.date | None = None) -> ChatR
     )
 
 
+def before_anything_reply(as_of: dt.date) -> ChatReply:
+    """The reply when nothing of the person is known on ``as_of``: said as it is, no model asked to fill the years in
+    (时间切片, docs/PRODUCT_PERSONA_AGENT.md P2.1)."""
+    text = f"{as_of.year} 年和那以前的你，我这里还没有任何资料，说不出那时的你。换一个更晚的年份再聊吧。"
+    return ChatReply(
+        reply=text,
+        abstain=True,
+        abstain_reason=text,
+        confidence=0,
+        mode="abstain",
+        as_of=as_of,
+        citations=[],
+        retrieved_ids=[],
+    )
+
+
 class PersonaChat:
     def __init__(
         self,
@@ -1055,13 +1071,18 @@ class PersonaChat:
         today: dt.date | None = None,
         owner_said: Sequence[str] = (),
         team_answers: Sequence[str] = (),
+        sliced: bool = False,
     ) -> ChatReply:
+        """``sliced``: the person chose to talk with themself as of ``as_of`` (时间切片): with nothing of them known by
+        then, it says so and asks no model."""
         if not messages or messages[-1].role != "user":
             raise ValueError("the last message must be the user's")
         if in_crisis(messages[-1].content):
             return crisis_reply()
         if persist and (unbuilt := self._unbuilt_reply(as_of)) is not None:
             return unbuilt
+        if sliced and not attachments and (early := self._before_anything(as_of)) is not None:
+            return early
         ctx = self._search(messages, as_of, today)
         ctx.today = today
         ctx.owner_said = list(owner_said)[-OWNER_SAID_TURNS:]
@@ -1087,9 +1108,10 @@ class PersonaChat:
         owner_said: Sequence[str] = (),
         team_answers: Sequence[str] = (),
         steps: bool = False,
+        sliced: bool = False,
     ) -> AsyncGenerator[str | ChatReply | Step]:
         """The answer's words as they come, then the reply; with ``steps``, also a ``Step`` as each stage before the
-        words begins, for the page to say what it waits for."""
+        words begins, for the page to say what it waits for. ``sliced``: as in ``reply``."""
         if not messages or messages[-1].role != "user":
             raise ValueError("the last message must be the user's")
         if in_crisis(messages[-1].content):
@@ -1101,6 +1123,10 @@ class PersonaChat:
         if persist and (unbuilt := await off_loop(partial(self._unbuilt_reply, as_of))) is not None:
             yield unbuilt.reply
             yield unbuilt
+            return
+        if sliced and not attachments and (early := await off_loop(partial(self._before_anything, as_of))) is not None:
+            yield early.reply
+            yield early
             return
         if steps:
             yield Step("search")
@@ -1189,6 +1215,22 @@ class PersonaChat:
         if not self.store.has_items() and self.store.get_meta("built_at") is None:
             return no_profile_reply(self.store, as_of)
         return None
+
+    def _before_anything(self, as_of: dt.date | None) -> ChatReply | None:
+        """The reply when the conversation looks back to ``as_of`` and nothing of the person is known by then: no item,
+        none of their own words, nothing in their ledger (``ledger.for_chat`` counts an undated entry as said); None
+        otherwise."""
+        if as_of is None:
+            return None
+        material = self._material(as_of)
+        if material.items.candidates or material.expressions.candidates:
+            return None
+        if self.ledger and any(
+            e.review is not ReviewStatus.REJECTED and (e.meeting_date or dt.date.min) <= as_of
+            for e in self.store.list_ledger()
+        ):
+            return None
+        return before_anything_reply(as_of)
 
     def _search(
         self, messages: Sequence[ChatTurn], as_of: dt.date | None, today: dt.date | None = None

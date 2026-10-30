@@ -148,6 +148,32 @@ class ConversationIndex:
             logger.warning("could not index conversation %s in the team", conversation_id, exc_info=True)
 
 
+# The date the person's own conversation looks back to (时间切片, docs/PRODUCT_PERSONA_AGENT.md P2.1), by conversation.
+AS_OF_PREFIX = "conversation_as_of:"
+
+
+def conversation_as_of(store: PersonaStore, conversation_id: str) -> str | None:
+    """The date the conversation last asked to be answered as of, ``YYYY-MM-DD``; None for the person as they are."""
+    return store.get_meta(AS_OF_PREFIX + conversation_id)
+
+
+def keep_as_of(store: PersonaStore, conversation_id: str | None, email: str | None, as_of: dt.date | None) -> None:
+    """Remember the date ``email``'s own conversation is answered as of, for it to go on so when opened again; written
+    only when it changes, since every write of ``p_meta`` makes the next answer read the memory afresh."""
+    if conversation_id is None:
+        return
+    head = store.conversation_head(conversation_id)
+    if head is None or head[0] != email:
+        return
+    value = as_of.isoformat() if as_of is not None else None
+    if conversation_as_of(store, conversation_id) == value:
+        return
+    if value is None:
+        store.delete_meta(AS_OF_PREFIX + conversation_id)
+    else:
+        store.set_meta(AS_OF_PREFIX + conversation_id, value)
+
+
 def append_user(
     store: PersonaStore,
     conversation_id: str | None,
@@ -230,6 +256,9 @@ def register(app: FastAPI, settings: Settings, index: ConversationIndex, desk: H
                 for turn in conversation["turns"]:
                     if turn["id"] in rated:
                         turn["self_rating"] = rated[turn["id"]]
+            # The date it looks back to (时间切片): only the person's own conversation has one.
+            if audience == SELF and (as_of := conversation_as_of(store, conversation_id)):
+                conversation["as_of"] = as_of
             # ``audience`` is the tier it answers from: the person's own conversation is with their assistant.
             return {**annotate_promises(store, annotate_notes(store, conversation)), "audience": audience}
 
@@ -246,6 +275,8 @@ def register(app: FastAPI, settings: Settings, index: ConversationIndex, desk: H
         with PersonaStore(settings.db_path) as store:
             if not store.delete_conversation(conversation_id, owner(request)):
                 raise HTTPException(404, "找不到这段对话")
+            if conversation_as_of(store, conversation_id) is not None:
+                store.delete_meta(AS_OF_PREFIX + conversation_id)
         index.deleted(conversation_id)
         return {"deleted": True}
 

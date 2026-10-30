@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router';
 import {
+  Button,
   Dialog,
   Disclosure,
   ListRow,
@@ -27,6 +29,8 @@ interface StoryYear {
 interface Story {
   years: StoryYear[];
   undated: StoryItem[];
+  /** The first year anything is known as of: a conversation can look back to it and later (时间切片). */
+  since?: number | null;
 }
 
 /** A memory of the story. One dated only by when its words were written says so: the year may be when it was
@@ -59,6 +63,14 @@ export function LifeStory({
 }) {
   const [story, setStory] = useState<Story | null>(null);
   const [error, setError] = useState('');
+  const navigate = useNavigate();
+  // 和那年的自己聊 (P2.1): a year gone by that anything is known as of; this year is the person as they are.
+  const since = story?.since ?? null;
+  const thisYear = new Date().getFullYear();
+  const talkTo = (year: number) => {
+    onOpenChange(false);
+    navigate('/chat', { state: { asOfYear: year } });
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -102,6 +114,20 @@ export function LifeStory({
                   key={span.year}
                   variant="divided"
                   title={String(span.year)}
+                  trailing={
+                    since !== null &&
+                    span.year >= since &&
+                    span.year < thisYear && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        aria-label={`和${span.year}年的自己聊`}
+                        onClick={() => talkTo(span.year)}
+                      >
+                        和那年聊
+                      </Button>
+                    )
+                  }
                 >
                   <Stack as="ul" gap={1}>
                     {span.items.map((item) => (

@@ -4,6 +4,7 @@ stands at once) and the trial question that shows what a colleague would get."""
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import re
 import sqlite3
@@ -752,3 +753,71 @@ def test_the_person_says_of_an_answer_whether_it_is_like_them_and_it_is_kept_for
     asked = {"conversation_id": theirs, "reply": answer["reply"], "rating": "like"}
     assert scene.web.put("/api/persona/self-ratings", json=asked, headers=scene.headers).status_code == 403
     assert scene.web.get("/api/persona/self-ratings", headers=scene.headers).status_code == 403
+
+
+# ------------------------------------------------------------ 时间切片
+
+
+def dated(item_id: str, facet: str, marker: str, day: dt.date) -> PersonaItem:
+    made = item(item_id, facet, marker)
+    return made.model_copy(update={"evidence": [e.model_copy(update={"date": day}) for e in made.evidence]})
+
+
+@pytest.fixture
+def years(scene: Scene) -> Scene:
+    """What the person said of work in 2019 and of their family in 2024."""
+    with PersonaStore(scene.path) as store:
+        store.replace_facet_items("2.1", [dated("pi_work", "2.1", WORK, dt.date(2019, 5, 1))])
+        store.replace_facet_items("9.3", [dated("pi_family", "9.3", FAMILY, dt.date(2024, 3, 1))])
+    scene.take()
+    return scene
+
+
+def test_the_person_talks_with_themself_as_of_a_year_and_the_conversation_goes_on_so(years: Scene) -> None:
+    scene = years
+    scene.as_("person")
+    conversation = scene.conversation()
+    final = scene.say(conversation, as_of="2020-12-31")
+    assert final["as_of"] == "2020-12-31"
+    # What was known by then answers; what was said later is not used.
+    assert WORK in scene.shown() and FAMILY not in scene.shown()
+    opened = scene.web.get(f"/api/conversations/{conversation}", headers=scene.headers).json()
+    assert opened["as_of"] == "2020-12-31"
+    # Back to now: the conversation is the person as they are.
+    scene.recorder.seen.clear()
+    assert scene.say(conversation)["as_of"] is None
+    assert FAMILY in scene.shown()
+    assert "as_of" not in scene.web.get(f"/api/conversations/{conversation}", headers=scene.headers).json()
+    # Deleted, nothing of it is kept.
+    scene.say(conversation, as_of="2020-12-31")
+    assert scene.web.delete(f"/api/conversations/{conversation}", headers=scene.headers).status_code == 200
+    with PersonaStore(scene.path) as store:
+        assert store.meta_with_prefix("conversation_as_of:") == {}
+
+
+def test_before_anything_is_known_the_twin_says_so_and_asks_no_model(years: Scene) -> None:
+    scene = years
+    scene.as_("person")
+    conversation = scene.conversation()
+    final = scene.say(conversation, "那年你在想什么", as_of="2015-12-31")
+    assert scene.recorder.seen == []
+    assert final["abstain"] is True and final["as_of"] == "2015-12-31" and "2015 年" in final["reply"]
+    saved = scene.web.get(f"/api/conversations/{conversation}", headers=scene.headers).json()
+    assert [t["role"] for t in saved["turns"]] == ["user", "twin"] and saved["as_of"] == "2015-12-31"
+
+
+def test_only_the_persons_own_conversation_looks_back_and_anyone_elses_answers_as_of_now(years: Scene) -> None:
+    scene = years
+    # A colleague asking as of a year is answered as of now, and nothing is kept of the year.
+    scene.as_("visitor")
+    theirs = scene.conversation()
+    final = scene.say(theirs, "他最近在忙什么", as_of="2015-12-31")
+    assert final["as_of"] is None and final["abstain"] is False and WORK in scene.shown()
+    assert "as_of" not in scene.web.get(f"/api/conversations/{theirs}", headers=scene.headers).json()
+    # A trial question is a colleague's too.
+    scene.as_("person")
+    scene.recorder.seen.clear()
+    trial = scene.say(scene.conversation(), "最近在忙什么", preview=True, as_of="2015-12-31")
+    assert trial["as_of"] is None and WORK in scene.shown()
+    with PersonaStore(scene.path) as store:
+        assert store.meta_with_prefix("conversation_as_of:") == {}

@@ -190,6 +190,7 @@ beforeEach(() => {
   vi.stubGlobal('fetch', fetcher);
 });
 afterEach(() => {
+  vi.useRealTimers();
   setPersonaId('default');
   useAuth.setState({ identity: null });
   usePersonas.setState({ id: '', items: [] });
@@ -1150,4 +1151,106 @@ it('opens 照镜子 in a new conversation with the two sides of a memory waiting
     reflection: 'mirror',
     messages: [{ role: 'user', content: draft }],
   });
+});
+
+/** 时间切片: the first year anything is known as of, as the life line says. */
+function knownSince(since: number | null) {
+  // Which years are gone by depends on this one.
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-10-30T10:00:00'));
+  const answering = fetcher.getMockImplementation() as (
+    url: string,
+    init?: RequestInit,
+  ) => Promise<Response>;
+  fetcher.mockImplementation(async (url: string, init?: RequestInit) =>
+    url === '/api/persona/life-story'
+      ? json({ years: [], undated: [], since })
+      : answering(url, init),
+  );
+}
+
+it('opens a new conversation with the person as they were in a year chosen on the life line, and asks as of its end', async () => {
+  const person = userEvent.setup();
+  knownSince(2015);
+  streamed.push(answer({ reply: '那年我刚辞职。', as_of: '2018-12-31' }));
+  mount(
+    personas,
+    { pathname: '/chat', state: { asOfYear: 2018 } },
+    { work: false },
+    'persona',
+  );
+  await list();
+  const year = await screen.findByRole('combobox', {
+    name: '和哪一年的自己聊',
+  });
+  await waitFor(() => expect(year).toHaveValue('2018'));
+  expect(year).toHaveDisplayValue('2018 年的你');
+  // From the first year anything is known of to last year; this year is the person as they are.
+  expect(
+    within(year)
+      .getAllByRole('option')
+      .map((option) => option.textContent),
+  ).toEqual([
+    '现在的你',
+    ...[2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017, 2016, 2015].map(
+      (y) => `${y} 年的你`,
+    ),
+  ]);
+  await person.type(
+    screen.getByRole('textbox', { name: '你说' }),
+    '你在忙什么',
+  );
+  await person.click(screen.getByRole('button', { name: '发送' }));
+  await screen.findByText('那年我刚辞职。');
+  expect(bodyOf('/api/persona/chat/stream')[0]).toMatchObject({
+    as_of: '2018-12-31',
+    messages: [{ role: 'user', content: '你在忙什么' }],
+  });
+});
+
+it('goes on looking back to the year a conversation was had with when it is opened again, until the person chooses now', async () => {
+  const person = userEvent.setup();
+  knownSince(2019);
+  server.rows.get('c-self')!.as_of = '2020-12-31';
+  mount(personas, '/chat', { work: false }, 'persona');
+  const sheet = await list();
+  await person.click(
+    await within(sheet).findByRole('button', {
+      name: row('我上周答应过谁什么'),
+    }),
+  );
+  const year = await screen.findByRole('combobox', {
+    name: '和哪一年的自己聊',
+  });
+  await waitFor(() => expect(year).toHaveDisplayValue('2020 年的你'));
+  const box = screen.getByRole('textbox', { name: '你说' });
+  await person.type(box, '还记得吗');
+  await person.click(screen.getByRole('button', { name: '发送' }));
+  await screen.findByText('好的。');
+  expect(bodyOf('/api/persona/chat/stream')[0]).toMatchObject({
+    conversation_id: 'c-self',
+    as_of: '2020-12-31',
+  });
+  await person.selectOptions(year, '现在的你');
+  await person.type(box, '现在呢');
+  await person.click(screen.getByRole('button', { name: '发送' }));
+  await waitFor(() =>
+    expect(bodyOf('/api/persona/chat/stream')).toHaveLength(2),
+  );
+  expect(bodyOf('/api/persona/chat/stream')[1]).not.toHaveProperty('as_of');
+});
+
+it('offers no year to look back to where nothing of the person is dated', async () => {
+  knownSince(null);
+  mount(personas, '/chat', { work: false }, 'persona');
+  await list();
+  await screen.findByText('仅你可见');
+  await waitFor(() =>
+    expect(
+      fetcher.mock.calls.some(([url]) => url === '/api/persona/life-story'),
+    ).toBe(true),
+  );
+  expect(
+    screen.queryByRole('combobox', { name: '和哪一年的自己聊' }),
+  ).toBeNull();
 });

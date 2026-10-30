@@ -31,6 +31,7 @@ import { useProfile } from './useProfile';
 import { MemoryUpdating } from '../memories/BuildProgress';
 import { FillDialog, type FillScope } from '../fill/FillDialog';
 import { LifeStory } from './LifeStory';
+import { Observations } from './Observations';
 import { usePersonaEdition } from '../../stores/auth';
 import { useStatus } from '../../stores/status';
 import { ITEM_PAGE_SIZE, usePagedItems } from './usePagedItems';
@@ -413,6 +414,8 @@ export function Overview({ ask }: { ask?: AskPerson }) {
   const reviewing = sutai && profile.canTier;
   // What was told, laid out by year (生命叙事), beside the page.
   const [story, setStory] = useState(false);
+  // A few observations held up to the person (剖析观察), beside the page.
+  const [observing, setObserving] = useState(false);
   // A link from a colleague asking for more of one aspect opens 补一补 on it, for the person it is meant for.
   const [params, setParams] = useSearchParams();
   const requested = params.get('fill');
@@ -555,6 +558,14 @@ export function Overview({ ask }: { ask?: AskPerson }) {
                 >
                   看生命线
                 </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  aria-haspopup="dialog"
+                  onClick={() => setObserving(true)}
+                >
+                  看剖析
+                </Button>
               </>
             ) : profile.canTier ? (
               <Button
@@ -667,6 +678,9 @@ export function Overview({ ask }: { ask?: AskPerson }) {
         onKept={() => setBuilding(true)}
       />
       {reviewing && <LifeStory open={story} onOpenChange={setStory} />}
+      {reviewing && (
+        <Observations open={observing} onOpenChange={setObserving} />
+      )}
     </div>
   );
 }

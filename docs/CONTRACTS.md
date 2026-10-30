@@ -131,6 +131,12 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
   被否定的不算。年份不经模型：条目表述里、再是依据原话里写出的“YYYY年”（1900 到今年，取最早的）记为 `basis: "written"`；
   否则取行为类依据（日记、聊天、文档、录音，不含问卷和访谈这种回头讲的）最早的日期，记为 `"dated"`；都没有的进 `undated`。
   `years` 从最早有条目的一年排到今年，中间连续没有条目的年份合成一段（`items` 为空，`until` 是这段最后一年）。
+- **Observations（P1.7）**：`GET /api/persona/observations` → `{made_at, kinds: [{id, label}], observations: [{id, kind,
+  kind_label, text, quotes: [{quote, date, dream}], mark}]}`；`POST /api/persona/observations` 重新生成（相关条目少于
+  `MIN_ITEMS` 时 400，不调用模型；模型失败 502），返回同样的结构；`PUT /api/persona/observations/{id}/mark` `{mark: "right" |
+  "wrong" | "useless" | null}`，找不到 404。都只给本人。`kind` 是 `persona.observations.KINDS` 的六类之一。
+  状态存在 `p_meta` 的 `observations:state`（`{made_at, observations, marks}`），不需要迁移；`marks` 是每条观察最新的标记，
+  重新生成后仍保留，观察的 id 由类别和文字算出，同样的观察再出现时带回原来的标记。观察不进记忆，也不给同事的对话用。
 - **Diary and the mirror（P1.1）**：`SourceKind.DIARY`（日记）由 `parse_diary` 读入：日期开头、后面至多几个字的行
   是一天的标题（可带 Markdown `#`），之后每段落都是本人的、带这一天的日期；日期后面是一句话（超过 12 个字或带标点）时，
   这句是当天的第一段。第一天之前单独一行的短标题不算条目。`detect_kind` 在聊天、访谈之后、文档之前识别：

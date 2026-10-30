@@ -443,6 +443,8 @@ GATED_PATHS = (
     "/api/persona/handoffs",
     "/api/persona/answers",
     "/api/persona/fill",
+    "/api/persona/life-",
+    "/api/persona/observations",
     "/api/persona/ledger",
 )
 
@@ -578,6 +580,9 @@ def register(
     from . import fill as fill_routes
 
     fill_routes.register(app, settings, backends, queue_build, ingestion.lock, open_store)
+    from . import observations as observation_routes
+
+    observation_routes.register(app, settings, backends, ingestion.lock, open_store)
     from . import claims
 
     claims.register(app, settings, ingestion)

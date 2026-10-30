@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useLocation, useSearchParams } from 'react-router';
+import { useLocation, useNavigate, useSearchParams } from 'react-router';
 import { PanelLeft, SquarePen, X } from 'lucide-react';
 import {
   ActionMenu,
@@ -67,7 +67,8 @@ const PEOPLE_SHOWN = 5;
  */
 export function Chat() {
   const personaId = usePersonaId();
-  const { pathname, state, key } = useLocation();
+  const { pathname, search, state, key } = useLocation();
+  const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const active = pathname === '/chat';
   const confirm = useConfirm();
@@ -143,7 +144,9 @@ export function Chat() {
     sliced.current = key;
     clearChat();
     setAsOf(yearEnd(askedYear));
-  }, [askedYear, key, clearChat, setAsOf]);
+    // Taken up once: reloading the page goes on with the conversation it opened, not a new one again.
+    void navigate({ pathname, search }, { replace: true, state: null });
+  }, [askedYear, key, clearChat, setAsOf, navigate, pathname, search]);
   // 时间切片: the years the person's own conversation can look back to, from the first one anything is known of.
   const [since, setSince] = useState<number | null>(null);
   useEffect(() => {

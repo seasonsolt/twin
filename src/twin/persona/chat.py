@@ -1167,7 +1167,7 @@ class PersonaChat:
             return refused
         if persist and (unbuilt := self._unbuilt_reply(as_of)) is not None:
             return unbuilt
-        if sliced and not attachments and (early := self._before_anything(as_of)) is not None:
+        if sliced and not attachments and (early := self.before_anything(as_of)) is not None:
             return early
         ctx = self._search(messages, as_of, today)
         ctx.today = today
@@ -1214,7 +1214,7 @@ class PersonaChat:
             yield unbuilt.reply
             yield unbuilt
             return
-        if sliced and not attachments and (early := await off_loop(partial(self._before_anything, as_of))) is not None:
+        if sliced and not attachments and (early := await off_loop(partial(self.before_anything, as_of))) is not None:
             yield early.reply
             yield early
             return
@@ -1317,7 +1317,7 @@ class PersonaChat:
             return no_profile_reply(self.store, as_of)
         return None
 
-    def _before_anything(self, as_of: dt.date | None) -> ChatReply | None:
+    def before_anything(self, as_of: dt.date | None) -> ChatReply | None:
         """The reply when the conversation looks back to ``as_of`` and nothing of the person is known by then: no item,
         none of their own words, nothing in their ledger (``ledger.for_chat`` counts an undated entry as said); None
         otherwise."""

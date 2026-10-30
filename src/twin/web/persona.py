@@ -252,6 +252,19 @@ def chat_asker(desk: HandoffDesk, email: str | None, name: str) -> Asker | None:
     return Asker(name, person=email == desk.owner())
 
 
+class NoModel:
+    """The chat model of a twin none can be made for, standing in where a reply asks none (时间切片 before anything
+    of the person is known); asked anything, it raises what kept the model from being made."""
+
+    name = "unavailable"
+
+    def __init__(self, error: BackendUnavailable) -> None:
+        self.error = error
+
+    def structured(self, *, system: str, user: str, schema: type[Any], **options: Any) -> Any:
+        raise self.error
+
+
 def run_chat(
     settings: Settings,
     llm: LLM,
@@ -1240,6 +1253,22 @@ def register(
     # A chat is admitted (backends ready, a place in the chat queue) before its user turn is saved, so a rejected
     # message, which the page offers to send again, leaves nothing behind.
 
+    def chat_model(as_of: dt.date | None, embedder: Embedder) -> LLM | ChatReply:
+        """The chat model; with none to be had, the reply of the person's own conversation looking back to a day
+        nothing of them is known by, which asks no model (``PersonaChat.before_anything``), else BackendUnavailable
+        as ever. ``as_of`` only where a conversation may answer that way (the person's own, nothing attached)."""
+        try:
+            return backends.chat_llm()
+        except BackendUnavailable as e:
+            if as_of is None:
+                raise
+            with open_store() as store:
+                own = PersonaChat(store, NoModel(e), embedder, settings, ledger=True, audience=SELF, assistant=True)
+                early = own.before_anything(as_of)
+            if early is None:
+                raise
+            return early
+
     @app.post("/api/persona/chat", status_code=202)
     def start_chat(body: ChatBody, request: Request) -> Any:
         if body.preview:
@@ -1265,7 +1294,16 @@ def register(
                     append_reply(store, body.conversation_id, email, chat_payload(store, reply), index),
                     status_code=200,
                 )
-        llm, embedder = backends.chat_llm(), backends.embedder()
+        embedder = backends.embedder()
+        model = chat_model(as_of, embedder)
+        if isinstance(model, ChatReply):
+            with open_store() as store:
+                append_user(store, body.conversation_id, email, messages[-1].content, index)
+                return JSONResponse(
+                    append_reply(store, body.conversation_id, email, chat_payload(store, model), index),
+                    status_code=200,
+                )
+        llm = model
 
         def accept(job: Job) -> None:
             with open_store() as store:
@@ -1479,9 +1517,16 @@ def register(
         with open_store() as store:
             profiled = store.has_items() or bool(attachment_passages)
         ticket: Ticket | None = None
+        # Said without a model: nothing built yet, or nothing of the person known by the day looked back to.
+        fixed: ChatReply | None = None
         if profiled:
-            llm, embedder = backends.chat_llm(), backends.embedder()
-            ticket = jobs.admit_stream()
+            embedder = backends.embedder()
+            model = chat_model(None if attachment_passages else as_of, embedder)
+            if isinstance(model, ChatReply):
+                fixed = model
+            else:
+                llm = model
+                ticket = jobs.admit_stream()
         try:
             if not preview:
                 with open_store() as store:
@@ -1519,7 +1564,7 @@ def register(
 
         def unbuilt() -> tuple[str, dict[str, Any]]:
             with open_store() as store:
-                reply = no_profile_reply(store, as_of)
+                reply = fixed or no_profile_reply(store, as_of)
                 if preview:
                     return reply.reply, chat_payload(store, reply, audience=COLLEAGUE)
                 return reply.reply, save(store, reply)

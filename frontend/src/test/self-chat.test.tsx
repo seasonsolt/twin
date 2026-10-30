@@ -1,6 +1,6 @@
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, useLocation } from 'react-router';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ConfirmProvider, TooltipProvider } from '../components/ui';
 import type { ChatReply, Turn } from '../features/chat/types';
@@ -78,6 +78,13 @@ const bodyOf = (url: string, method?: string) =>
     )
     .map(([, init]) => JSON.parse(String(init?.body ?? 'null')) as unknown);
 
+// The state of the page's history entry, which a reload of the page brings back.
+let entryState: unknown;
+function EntryState() {
+  entryState = useLocation().state;
+  return null;
+}
+
 function mount(
   items: Persona[] = personas,
   entry: string | { pathname: string; state: unknown } = '/chat',
@@ -107,6 +114,7 @@ function mount(
       <ConfirmProvider>
         <MemoryRouter initialEntries={[entry]}>
           <Chat />
+          <EntryState />
         </MemoryRouter>
       </ConfirmProvider>
     </TooltipProvider>,
@@ -1185,6 +1193,8 @@ it('opens a new conversation with the person as they were in a year chosen on th
   });
   await waitFor(() => expect(year).toHaveValue('2018'));
   expect(year).toHaveDisplayValue('2018 年的你');
+  // Taken up once, the year is gone from the history entry, so reloading the page does not open another conversation.
+  expect(entryState).toBeNull();
   // From the first year anything is known of to last year; this year is the person as they are.
   expect(
     within(year)

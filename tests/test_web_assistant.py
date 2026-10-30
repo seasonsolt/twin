@@ -65,6 +65,8 @@ class Recorder(FakeLLM):
     def __init__(self) -> None:
         super().__init__(self.handle)
         self.seen: list[str] = []
+        # Set before the first question to make the twin one with no model configured.
+        self.unconfigured = False
 
     @staticmethod
     def meta(text: str, user: str) -> dict[str, Any]:
@@ -108,7 +110,13 @@ def web(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[TestC
         ),
     )
     recorder = Recorder()
-    app = create_app(settings, llm_factory=lambda: recorder, embedder_factory=HashingEmbedder)
+
+    def model() -> Recorder:
+        if recorder.unconfigured:
+            raise RuntimeError("没有配置模型")
+        return recorder
+
+    app = create_app(settings, llm_factory=model, embedder_factory=HashingEmbedder)
     with TestClient(app, base_url="http://localhost") as client:
         client.app.state.sender = sender  # type: ignore[attr-defined]
         yield client, recorder
@@ -804,6 +812,22 @@ def test_before_anything_is_known_the_twin_says_so_and_asks_no_model(years: Scen
     assert final["abstain"] is True and final["as_of"] == "2015-12-31" and "2015 年" in final["reply"]
     saved = scene.web.get(f"/api/conversations/{conversation}", headers=scene.headers).json()
     assert [t["role"] for t in saved["turns"]] == ["user", "twin"] and saved["as_of"] == "2015-12-31"
+
+
+def test_before_anything_is_known_the_twin_says_so_with_no_model_configured(years: Scene) -> None:
+    scene = years
+    scene.recorder.unconfigured = True
+    scene.as_("person")
+    conversation = scene.conversation()
+    final = scene.say(conversation, "那年你在想什么", as_of="2015-12-31")
+    assert final["abstain"] is True and "2015 年" in final["reply"]
+    again = {"messages": [{"role": "user", "content": "那年呢"}], "conversation_id": conversation}
+    again["as_of"] = "2015-12-31"
+    answered = scene.web.post("/api/persona/chat", json=again, headers=scene.headers)
+    assert answered.status_code == 200 and answered.json()["abstain"] is True
+    # A year something is known by still needs the model.
+    body = {"messages": [{"role": "user", "content": QUESTION}], "conversation_id": conversation, "as_of": "2020-12-31"}
+    assert scene.web.post("/api/persona/chat/stream", json=body, headers=scene.headers).status_code == 503
 
 
 def test_only_the_persons_own_conversation_looks_back_and_anyone_elses_answers_as_of_now(years: Scene) -> None:

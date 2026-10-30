@@ -115,7 +115,11 @@ export interface Turn {
   handoff?: HandoffLine;
   /** A trial question (看同事会得到什么) or its answer: shown where it was asked, never saved or sent on. */
   preview?: boolean;
+  /** What the person said of this answer of their twin's (自评记录): like them or not. */
+  self_rating?: SelfRating;
 }
+
+export type SelfRating = 'like' | 'unlike';
 
 /** Whether the person has yet to answer what this turn left to them. */
 export const waiting = (turn: Turn) =>

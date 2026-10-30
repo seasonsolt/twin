@@ -445,6 +445,7 @@ GATED_PATHS = (
     "/api/persona/fill",
     "/api/persona/life-",
     "/api/persona/observations",
+    "/api/persona/self-ratings",
     "/api/persona/ledger",
 )
 
@@ -583,6 +584,9 @@ def register(
     from . import observations as observation_routes
 
     observation_routes.register(app, settings, backends, ingestion.lock, open_store)
+    from . import self_ratings as self_rating_routes
+
+    self_rating_routes.register(app, ingestion.lock, open_store)
     from . import claims
 
     claims.register(app, settings, ingestion)
@@ -1329,6 +1333,9 @@ def register(
                 payload["team_answers"] = shown
             payload["elapsed_ms"] = max(0, round((time.monotonic() - started_at) * 1000))
             payload["completed_at"] = dt.datetime.now(dt.UTC).isoformat(timespec="milliseconds")
+            # The way the person was talking with their assistant, for what they say of the answer (自评记录).
+            if assistant and body.reflection:
+                payload["reflection"] = body.reflection
             if preview:
                 payload["preview"] = {"withheld": trial_withheld(store, llm, embedder, settings, messages[-1].content)}
                 return payload

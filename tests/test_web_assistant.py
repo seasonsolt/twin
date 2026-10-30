@@ -700,3 +700,55 @@ def test_in_the_persona_edition_whoever_uses_the_twin_without_sign_in_is_the_per
         assert web.post("/api/persona/chat/stream", json=asked, headers=CSRF).status_code == 200
     [system] = [s for s in recorder.seen if "本人的助手" in s]
     assert "## 这一轮：照镜子" in system
+
+
+# ------------------------------------------------------------ 自评记录
+
+
+def test_the_person_says_of_an_answer_whether_it_is_like_them_and_it_is_kept_for_evaluation(scene: Scene) -> None:
+    scene.take()
+    scene.as_("person")
+    conversation = scene.conversation()
+    final = scene.say(conversation, "我最近在忙什么", reflection="mirror")
+    rate = {"conversation_id": conversation, "reply": final["reply"], "rating": "unlike"}
+    marked = scene.web.put("/api/persona/self-ratings", json=rate, headers=scene.headers)
+    assert marked.status_code == 200 and marked.json() == {"rating": "unlike"}
+    # Changed, it is the latest mark that counts; read back with the conversation.
+    scene.web.put("/api/persona/self-ratings", json={**rate, "rating": "like"}, headers=scene.headers)
+    saved = scene.web.get(f"/api/conversations/{conversation}", headers=scene.headers).json()
+    assert [t.get("self_rating") for t in saved["turns"]] == [None, "like"]
+    [kept] = scene.web.get("/api/persona/self-ratings", headers=scene.headers).json()["ratings"]
+    assert (kept["question"], kept["reply"], kept["rating"], kept["reflection"]) == (
+        "我最近在忙什么",
+        final["reply"],
+        "like",
+        "mirror",
+    )
+    assert kept["turn_id"] == saved["turns"][1]["id"]
+    # Only an answer the twin gave there: words it never said, or help given when the person spoke of harming
+    # themself, are not marked.
+    assert (
+        scene.web.put(
+            "/api/persona/self-ratings", json={**rate, "reply": "我说过的话"}, headers=scene.headers
+        ).status_code
+        == 404
+    )
+    crisis = scene.say(conversation, "最近总觉得活不下去了")
+    refused = {**rate, "reply": crisis["reply"]}
+    assert scene.web.put("/api/persona/self-ratings", json=refused, headers=scene.headers).status_code == 400
+    with PersonaStore(scene.path) as store:
+        store.append_conversation_turn(
+            conversation, PERSON, "twin", "资料里没有。", {"reply": "资料里没有。", "abstain": True, "mode": "abstain"}
+        )
+    unknown = {**rate, "reply": "资料里没有。"}
+    assert scene.web.put("/api/persona/self-ratings", json=unknown, headers=scene.headers).status_code == 400
+    # Taken back, it is gone.
+    scene.web.put("/api/persona/self-ratings", json={**rate, "rating": None}, headers=scene.headers)
+    assert scene.web.get("/api/persona/self-ratings", headers=scene.headers).json()["ratings"] == []
+    # Someone else talking with the twin is not asked whether it is like the person.
+    scene.as_("visitor")
+    theirs = scene.conversation()
+    answer = scene.say(theirs, "他最近在忙什么")
+    asked = {"conversation_id": theirs, "reply": answer["reply"], "rating": "like"}
+    assert scene.web.put("/api/persona/self-ratings", json=asked, headers=scene.headers).status_code == 403
+    assert scene.web.get("/api/persona/self-ratings", headers=scene.headers).status_code == 403

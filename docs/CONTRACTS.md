@@ -137,6 +137,11 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
   "wrong" | "useless" | null}`，找不到 404。都只给本人。`kind` 是 `persona.observations.KINDS` 的六类之一。
   状态存在 `p_meta` 的 `observations:state`（`{made_at, observations, marks}`），不需要迁移；`marks` 是每条观察最新的标记，
   重新生成后仍保留，观察的 id 由类别和文字算出，同样的观察再出现时带回原来的标记。观察不进记忆，也不给同事的对话用。
+- **Self ratings（P1.8）**：`PUT /api/persona/self-ratings` `{conversation_id, reply, rating: "like" | "unlike" | null}` →
+  `{rating}`：`reply` 必须是这段对话（本人的）里已保存的一条分身回答的原文，找不到 404；记下的事、危机回复、交代任务、`abstain` 的回复 400。
+  `GET /api/persona/self-ratings` → `{labels, ratings: [{turn_id, question, reply, rating, rated_at, mode, as_of, reflection}]}`。
+  都只给本人。`GET /api/conversations/{id}` 在本人档的对话里给标过的分身回答加 `self_rating`。本人对话的回答 payload
+  在用了照镜子等用法时多一个 `reflection` 字段。存在 `p_meta` 的 `self_ratings`。
 - **Diary and the mirror（P1.1）**：`SourceKind.DIARY`（日记）由 `parse_diary` 读入：日期开头、后面至多几个字的行
   是一天的标题（可带 Markdown `#`），之后每段落都是本人的、带这一天的日期；日期后面是一句话（超过 12 个字或带标点）时，
   这句是当天的第一段。第一天之前单独一行的短标题不算条目。`detect_kind` 在聊天、访谈之后、文档之前识别：

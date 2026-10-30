@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from ..config import Settings
 from ..handoffs import HandoffDesk
+from ..persona import self_ratings
 from ..persona.assistant import annotate_notes, annotate_promises, record_promise
 from ..persona.store import PersonaStore
 from ..persona.tiers import COLLEAGUE, SELF, Audience
@@ -224,6 +225,11 @@ def register(app: FastAPI, settings: Settings, index: ConversationIndex, desk: H
             except KeyError:
                 raise HTTPException(404, "找不到这段对话") from None
             audience = index.audience(conversation_id, request_audience(request))
+            # What the person said of an answer, 像我 or 不像我 (``persona.self_ratings``): only in their own.
+            if audience == SELF and (rated := self_ratings.ratings_of(store, conversation_id)):
+                for turn in conversation["turns"]:
+                    if turn["id"] in rated:
+                        turn["self_rating"] = rated[turn["id"]]
             # ``audience`` is the tier it answers from: the person's own conversation is with their assistant.
             return {**annotate_promises(store, annotate_notes(store, conversation)), "audience": audience}
 

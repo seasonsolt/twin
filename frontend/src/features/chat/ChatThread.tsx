@@ -54,6 +54,7 @@ import {
   promiseTaken,
   type ChatReply,
   type Reflection,
+  type SelfRating,
   type Turn,
 } from './types';
 import type { Playback } from './usePlayback';
@@ -94,6 +95,36 @@ const unlabelled = (reply: ChatReply) =>
   (!!reply.team_answers?.length &&
     reply.mode === 'general' &&
     !reply.cited?.length);
+
+const SELF_RATINGS: readonly { id: SelfRating; label: string }[] = [
+  { id: 'like', label: '像我' },
+  { id: 'unlike', label: '不像我' },
+];
+
+/** 像我 / 不像我 under an answer: pressed again, the mark is taken back. */
+function SelfRatingButtons({
+  value,
+  onRate,
+}: {
+  value?: SelfRating;
+  onRate: (value: SelfRating | null) => void;
+}) {
+  return (
+    <span role="group" aria-label="像不像我" className="flex items-center">
+      {SELF_RATINGS.map((option) => (
+        <ChatAction
+          key={option.id}
+          size="sm"
+          selected={value === option.id}
+          aria-pressed={value === option.id}
+          onClick={() => onRate(value === option.id ? null : option.id)}
+        >
+          {option.label}
+        </ChatAction>
+      ))}
+    </span>
+  );
+}
 
 /**
  * One conversation with the twin: the notes above it (memory being organised, a new twin's setup), the messages with
@@ -138,6 +169,8 @@ export function ChatThread({
 }) {
   const personaId = usePersonaId();
   const personaEdition = usePersonaEdition();
+  // In their own conversation the person says of an answer whether it is like them (自评记录), once it is saved.
+  const rating = personaEdition && assistant && chat.conversationId !== null;
   // The person behind a twin reads what it says in their name; theirs to know, said once under the box.
   const seen = !useSeesWhole(persona) && persona?.claimed !== false;
   // Commitments are listed in a page an administrator can switch off; where it is off, they are not spoken of either.
@@ -540,6 +573,24 @@ export function ChatThread({
                                         <Copy size={16} aria-hidden />
                                       </IconButton>
                                     )}
+                                    {rating &&
+                                      !turn.preview &&
+                                      !turn.reply.abstain &&
+                                      !unlabelled(turn.reply) && (
+                                        <SelfRatingButtons
+                                          value={turn.self_rating}
+                                          onRate={(value) => {
+                                            void chat
+                                              .rateReply(turn.id, value)
+                                              .catch(() =>
+                                                toast(
+                                                  '没能记下，请重试',
+                                                  'danger',
+                                                ),
+                                              );
+                                          }}
+                                        />
+                                      )}
                                   </div>
                                 )}
                               </ReplyLine>

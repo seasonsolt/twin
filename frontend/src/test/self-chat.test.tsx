@@ -1059,6 +1059,8 @@ it('lets the person look at themself instead of asking in their own conversation
   expect(bodyOf('/api/persona/chat/stream')[0]).toMatchObject({
     reflection: 'mirror',
   });
+  // 像我 / 不像我 is the persona edition's.
+  expect(screen.queryByRole('group', { name: '像不像我' })).toBeNull();
 });
 
 it('in the persona edition offers no colleague’s answer to try, and says where help is with no word on how it answered', async () => {
@@ -1082,6 +1084,40 @@ it('in the persona edition offers no colleague’s answer to try, and says where
     await screen.findByText('听到你这样说，我很在意你现在的安全。'),
   ).toBeVisible();
   expect(screen.queryByText('通用回答')).toBeNull();
+  // Where help is, is no answer to say is like one or not.
+  expect(screen.queryByRole('group', { name: '像不像我' })).toBeNull();
+});
+
+it('in the persona edition lets the person say of an answer whether it is like them, and take it back', async () => {
+  const person = userEvent.setup();
+  streamed.push(answer({ reply: '我会先把手头的事做完再说。' }));
+  mount(personas, '/chat', { work: false }, 'persona');
+  await list();
+  await screen.findByText('仅你可见');
+  await person.type(
+    screen.getByRole('textbox', { name: '你说' }),
+    '要是同事临时加活，你怎么办',
+  );
+  await person.click(screen.getByRole('button', { name: '发送' }));
+  await screen.findByText('我会先把手头的事做完再说。');
+  const marks = await screen.findByRole('group', { name: '像不像我' });
+  const unlike = within(marks).getByRole('button', { name: '不像我' });
+  await person.click(unlike);
+  await waitFor(() => expect(unlike).toHaveAttribute('aria-pressed', 'true'));
+  const [rated] = bodyOf('/api/persona/self-ratings', 'PUT') as {
+    conversation_id: string;
+  }[];
+  expect(rated).toMatchObject({
+    reply: '我会先把手头的事做完再说。',
+    rating: 'unlike',
+  });
+  expect(rated.conversation_id).toBeTruthy();
+  // Pressed again, the mark is taken back.
+  await person.click(unlike);
+  await waitFor(() => expect(unlike).toHaveAttribute('aria-pressed', 'false'));
+  expect(bodyOf('/api/persona/self-ratings', 'PUT')[1]).toMatchObject({
+    rating: null,
+  });
 });
 
 it('opens 照镜子 in a new conversation with the two sides of a memory waiting to be sent', async () => {

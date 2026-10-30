@@ -17,6 +17,7 @@ import {
   type HandoffLine,
   type NoteTier,
   type Reflection,
+  type SelfRating,
   type Turn,
 } from './types';
 
@@ -572,12 +573,33 @@ export function useConversation(active: boolean) {
       ),
     );
   };
+  /** Say of an answer of the twin's whether it is like the person, or take that back (``null``). Rejects when it could
+   * not be kept. */
+  const rateReply = async (turnId: string, rating: SelfRating | null) => {
+    const current = id.current;
+    const reply = turns.find((turn) => turn.id === turnId)?.reply?.reply;
+    if (!current || !reply) return;
+    await api('/api/persona/self-ratings', {
+      method: 'PUT',
+      json: { conversation_id: current, reply, rating },
+      headers: headers(),
+    });
+    if (!mounted.current || personaId !== getPersonaId()) return;
+    setTurns((rows) =>
+      rows.map((turn) =>
+        turn.id === turnId
+          ? { ...turn, self_rating: rating ?? undefined }
+          : turn,
+      ),
+    );
+  };
   return {
     turns,
     conversationId,
     audience,
     conversationTitle,
     setNoteTier,
+    rateReply,
     undoPromise,
     askLensOwner,
     draft,

@@ -587,6 +587,9 @@ def register(
     from . import self_ratings as self_rating_routes
 
     self_rating_routes.register(app, ingestion.lock, open_store)
+    from . import will as will_routes
+
+    will_routes.register(app, ingestion.lock, open_store)
     from . import claims
 
     claims.register(app, settings, ingestion)

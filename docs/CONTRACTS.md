@@ -142,6 +142,25 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
   `GET /api/persona/self-ratings` → `{labels, ratings: [{turn_id, question, reply, rating, rated_at, mode, as_of, reflection}]}`。
   都只给本人。`GET /api/conversations/{id}` 在本人档的对话里给标过的分身回答加 `self_rating`。本人对话的回答 payload
   在用了照镜子等用法时多一个 `reflection` 字段。存在 `p_meta` 的 `self_ratings`。
+- **数字遗嘱（P2.2）**：`persona/will.py`。schema 9（`_MIGRATIONS` 第 9 条，`KernelVersion.schema` 随之为 9，不触发重新整理；升级前自动快照）加两张表：
+  `p_will_heirs (heir_id TEXT PRIMARY KEY, json TEXT NOT NULL, secret TEXT NOT NULL)`：`json` 是 `Heir`
+  `{heir_id, name, relation, aspects, facets, avoid, voice, likeness, retire_on, farewell, created_at, updated_at}`，
+  `secret` 是开启口令的 `{"kdf": "scrypt", n, r, p, salt, hash}`（`hashlib.scrypt`，n=2^15、r=8、p=1、32 字节，16 字节随机盐，十六进制），
+  和 `json` 分开存、从不随继承人读出；口令本身不落盘、不进日志、不出现在任何返回值里。
+  `p_will_history (id INTEGER PRIMARY KEY AUTOINCREMENT, at, actor, action, heir_id, json)`：每次修改追加一行，
+  `action` 是 `add` / `update` / `remove` / `taxonomy`，`json` 是 `{changes, heirs}`：这次改了哪些字段（只换口令时是 `["password"]`）
+  和改完后整份遗嘱（不含口令哈希）；两个触发器拒绝对它 `UPDATE` / `DELETE`，只追加。
+  `aspects` 是整个方面（`D1`–`D10`），`facets` 是方面之外单独给的细项；`will.allowed_facets(heir)` 是两者展开后的细项集合，默认空：
+  遗嘱没写的什么都不给。`avoid` 是不谈的话题（去重，至多 20 条、每条 60 字）；`voice` / `likeness` 默认 false，P2 只存；
+  `retire_on` 可空（不退场）；`farewell` 可空（用默认告别）。同一份遗嘱里称呼不重复（P2.7 按称呼加口令开启）；口令 6–128 个字符。
+  分类升级时（`_migrate_taxonomy`）继承人的 `facets` 按 `TAXONOMY_MIGRATIONS` 改号：拆开的给全部新细项，删掉的不再给，记一行 `taxonomy`（`actor` 为 `twin`）。
+  核对口令用 `will.verify(store, heir_id, password)`（按存下的参数重算，`hmac.compare_digest` 比较）。
+  接口都只给本人（`web/handoffs.py` 的 `person`，别人 403），口令只在请求里出现：
+  `GET /api/persona/will` → `{heirs: [Heir]}`；`POST /api/persona/will/heirs` `{name, relation?, aspects?, facets?, avoid?, voice?, likeness?, retire_on?, farewell?, password}`
+  → `{heir}`（没有口令或不合要求 400）；`PUT /api/persona/will/heirs/{heir_id}` 同样的字段整份重写，`password` 省略则保留原口令 → `{heir}`，找不到 404；
+  `DELETE /api/persona/will/heirs/{heir_id}` → `{ok: true}`，口令哈希一并删掉，历史里仍留着给过他什么；
+  `GET /api/persona/will/history` → `{changes: [{at, actor, action, heir_id, changes, heirs}]}`，从旧到新。`actor` 是本人的账号，没有账号时为 `self`。
+  受众档过滤（P2.4）和界面（P2.3）还没做：现在遗嘱不影响任何回答。
 - **Diary and the mirror（P1.1）**：`SourceKind.DIARY`（日记）由 `parse_diary` 读入：日期开头、后面至多几个字的行
   是一天的标题（可带 Markdown `#`），之后每段落都是本人的、带这一天的日期；日期后面是一句话（超过 12 个字或带标点）时，
   这句是当天的第一段。第一天之前单独一行的短标题不算条目。`detect_kind` 在聊天、访谈之后、文档之前识别：

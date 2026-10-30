@@ -77,7 +77,7 @@ class KernelVersion:
     taxonomy: str
 
 
-KERNEL = KernelVersion(schema=8, prompt=PROMPT_VERSION, taxonomy=TAXONOMY_VERSION)
+KERNEL = KernelVersion(schema=9, prompt=PROMPT_VERSION, taxonomy=TAXONOMY_VERSION)
 LEGACY_KERNEL = KernelVersion(schema=1, prompt="persona-v4", taxonomy="v1")
 
 

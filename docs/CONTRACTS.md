@@ -199,7 +199,7 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
   分类升级时（`_migrate_taxonomy`）继承人的 `facets` 按 `TAXONOMY_MIGRATIONS` 改号：拆开的给全部新细项，删掉的不再给，记一行 `taxonomy`（`actor` 为 `twin`）。
   核对口令用 `will.verify(store, heir_id, password)`（按存下的参数重算，`hmac.compare_digest` 比较）。
   接口都只给本人（`web/handoffs.py` 的 `person`，别人 403），口令只在请求里出现：
-  `GET /api/persona/will` → `{heirs: [Heir]}`；`POST /api/persona/will/heirs` `{name, relation?, aspects?, facets?, avoid?, voice?, likeness?, retire_on?, farewell?, password}`
+  `GET /api/persona/will` → `{heirs: [Heir], sealed}`（`sealed` 为 true 时记忆已冻结，遗嘱不能再改）；`POST /api/persona/will/heirs` `{name, relation?, aspects?, facets?, avoid?, voice?, likeness?, retire_on?, farewell?, password}`
   → `{heir}`（没有口令或不合要求 400）；`PUT /api/persona/will/heirs/{heir_id}` 同样的字段整份重写，`password` 省略则保留原口令 → `{heir}`，找不到 404；
   `DELETE /api/persona/will/heirs/{heir_id}` → `{ok: true}`，口令哈希一并删掉，历史里仍留着给过他什么；
   `GET /api/persona/will/history` → `{changes: [{at, actor, action, heir_id, changes, heirs}]}`，从旧到新。`actor` 是本人的账号，没有账号时为 `self`。

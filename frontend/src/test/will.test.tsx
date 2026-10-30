@@ -240,7 +240,7 @@ it('names a new heir step by step, giving nothing unless ticked and sending the 
   boxes.forEach((box) => expect(box).not.toBeChecked());
   // One facet of the second aspect, opened to its facets.
   await user.click(
-    within(aspects).getByRole('button', { name: /^生活与爱好的细项/ }),
+    within(aspects).getByRole('button', { name: /^生活与爱好里的各项/ }),
   );
   await user.click(within(aspects).getByRole('checkbox', { name: '兴趣爱好' }));
   expect(

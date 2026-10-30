@@ -611,7 +611,7 @@ export function CheckGroup({
           type="button"
           aria-expanded={open}
           aria-controls={listId}
-          aria-label={`${label}的细项，选了 ${chosen} / ${items.length}`}
+          aria-label={`${label}里的各项，选了 ${chosen} / ${items.length}`}
           onClick={() => setOpen((value) => !value)}
           className="inline-flex min-h-9 items-center gap-1 rounded-sm px-2 text-sm text-secondary tabular-nums hover:bg-soft"
         >

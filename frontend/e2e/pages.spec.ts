@@ -558,7 +558,7 @@ test('name an heir: the aspects they may use', async ({ page }, info) => {
   // The second step: whole aspects ticked, one facet of another, that aspect opened to its facets.
   const editor = page.getByRole('dialog', { name: '小雨' });
   await editor.getByRole('button', { name: '下一步' }).click();
-  await editor.getByRole('button', { name: /^怎么做决定的细项/ }).click();
+  await editor.getByRole('button', { name: /^怎么做决定里的各项/ }).click();
   await expect(
     editor.getByRole('checkbox', { name: '风险偏好' }),
   ).toBeChecked();

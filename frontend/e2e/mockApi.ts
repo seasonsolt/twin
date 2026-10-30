@@ -2603,7 +2603,7 @@ const handlers: Record<string, Handler> = {
     since: 2019,
   }),
   // 数字遗嘱: two heirs, one given whole aspects and a facet until a day, one given nothing yet.
-  'GET /api/persona/will': () => ({ heirs: willHeirs }),
+  'GET /api/persona/will': () => ({ heirs: willHeirs, sealed: false }),
   'GET /api/persona/will/history': () => ({
     changes: [
       {

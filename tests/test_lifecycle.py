@@ -295,6 +295,7 @@ def test_a_sealed_twin_refuses_every_write_to_its_memory_and_nothing_else(
     with TestClient(persona_app(tmp_path, monkeypatch, Promiser(), edition), base_url="http://localhost") as web:
         before = {w: web.request(w[0], concrete(w[1]), json={}, headers=CSRF).status_code for w in sorted(SEALED)}
         assert 423 not in before.values()
+        assert web.get("/api/persona/will").json()["sealed"] is False
         sealed_now(path)
         queued.clear()  # by the writes made alive
         with PersonaStore(path) as store:
@@ -317,6 +318,8 @@ def test_a_sealed_twin_refuses_every_write_to_its_memory_and_nothing_else(
         # Reading goes on.
         for route in ("/api/persona/items", "/api/persona/sources", "/api/persona/life-story", "/api/persona/coverage"):
             assert web.get(route).status_code == 200, route
+        # The will says it is sealed, so the page shows it as it stands before anything is tried.
+        assert web.get("/api/persona/will").json()["sealed"] is True
     with PersonaStore(path) as store:
         assert store.items_signature() == signature
     assert queued == []

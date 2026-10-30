@@ -244,7 +244,7 @@ def test_the_person_alone_reads_and_writes_their_will_and_no_answer_carries_the_
         assert response.status_code == 200, response.text
         return response.json()  # type: ignore[no-any-return]
 
-    assert call("GET", "/api/persona/will") == {"heirs": []}
+    assert call("GET", "/api/persona/will") == {"heirs": [], "sealed": False}
     # Naming an heir needs a word; a refused one is not echoed.
     refused = web.post("/api/persona/will/heirs", json={"name": "阿禾"}, headers=mine)
     assert refused.status_code == 400
@@ -297,7 +297,7 @@ def test_the_person_alone_reads_and_writes_their_will_and_no_answer_carries_the_
 
     web.cookies.set("twin_session", session or "")
     assert call("DELETE", f"/api/persona/will/heirs/{heir_id}") == {"ok": True}
-    assert call("GET", "/api/persona/will") == {"heirs": []}
+    assert call("GET", "/api/persona/will") == {"heirs": [], "sealed": False}
     assert [c["action"] for c in call("GET", "/api/persona/will/history")["changes"]] == ["add", "update", "remove"]
     with PersonaStore(db) as store:
         assert store.will_secret(heir_id) is None and not will.verify(store, heir_id, WORD)

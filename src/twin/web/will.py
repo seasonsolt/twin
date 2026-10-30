@@ -12,7 +12,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import Field
 
-from ..persona import will
+from ..persona import lifecycle, will
 from ..persona.store import PersonaStore
 from .handoffs import person
 
@@ -36,11 +36,13 @@ def register(
 ) -> None:
     @app.get("/api/persona/will")
     def read(request: Request) -> dict[str, Any]:
-        """The will as it stands: its heirs, without anything of their words."""
+        """The will as it stands: its heirs, without anything of their words, and whether the memory is sealed (when
+        nothing in it can be changed any more)."""
         person(request)
         with open_store() as store:
             heirs = will.load(store)
-        return {"heirs": [h.model_dump(mode="json") for h in heirs]}
+            sealed = lifecycle.sealed(store)
+        return {"heirs": [h.model_dump(mode="json") for h in heirs], "sealed": sealed}
 
     @app.post("/api/persona/will/heirs")
     def add(body: HeirBody, request: Request) -> dict[str, Any]:

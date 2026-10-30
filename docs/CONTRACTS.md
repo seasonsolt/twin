@@ -126,6 +126,11 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
   `{question}` → `{stages}`。题号是 `persona.life_review.QUESTIONS` 的 `L01`–`L14`，`POST /api/persona/fill/draft` /
   `preview` / `keep` 也接受，`facet` 必须是这一题标的细项之一；`keep` 之后这一题记为答过。进度在 `p_meta`
   的 `life_review:state`（`{answered, skipped}`）。都只给本人（`person(request)`）。
+- **Life story（P1.6）**：`GET /api/persona/life-story` → `{years: [{year, until, items: [{item_id, facet_id, facet_name,
+  statement, basis}]}], undated: [同样的条目]}`，只给本人。只读 1.2、1.3、10.1–10.4 的条目（`persona.life_story.STORY_FACETS`），
+  被否定的不算。年份不经模型：条目表述里、再是依据原话里写出的“YYYY年”（1900 到今年，取最早的）记为 `basis: "written"`；
+  否则取行为类依据（日记、聊天、文档、录音，不含问卷和访谈这种回头讲的）最早的日期，记为 `"dated"`；都没有的进 `undated`。
+  `years` 从最早有条目的一年排到今年，中间连续没有条目的年份合成一段（`items` 为空，`until` 是这段最后一年）。
 - **Diary and the mirror（P1.1）**：`SourceKind.DIARY`（日记）由 `parse_diary` 读入：日期开头、后面至多几个字的行
   是一天的标题（可带 Markdown `#`），之后每段落都是本人的、带这一天的日期；日期后面是一句话（超过 12 个字或带标点）时，
   这句是当天的第一段。第一天之前单独一行的短标题不算条目。`detect_kind` 在聊天、访谈之后、文档之前识别：

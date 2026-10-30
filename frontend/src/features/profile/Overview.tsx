@@ -30,6 +30,7 @@ import { useItemSearch } from './useItemSearch';
 import { useProfile } from './useProfile';
 import { MemoryUpdating } from '../memories/BuildProgress';
 import { FillDialog, type FillScope } from '../fill/FillDialog';
+import { LifeStory } from './LifeStory';
 import { usePersonaEdition } from '../../stores/auth';
 import { useStatus } from '../../stores/status';
 import { ITEM_PAGE_SIZE, usePagedItems } from './usePagedItems';
@@ -410,6 +411,8 @@ export function Overview({ ask }: { ask?: AskPerson }) {
   // about their life instead, stage by stage (人生回顾).
   const [filling, setFilling] = useState<FillScope | null>(null);
   const reviewing = sutai && profile.canTier;
+  // What was told, laid out by year (生命叙事), beside the page.
+  const [story, setStory] = useState(false);
   // A link from a colleague asking for more of one aspect opens 补一补 on it, for the person it is meant for.
   const [params, setParams] = useSearchParams();
   const requested = params.get('fill');
@@ -540,9 +543,19 @@ export function Overview({ ask }: { ask?: AskPerson }) {
               </Text>
             )}
             {reviewing ? (
-              <Button size="sm" onClick={() => setFilling({ life: true })}>
-                回顾人生
-              </Button>
+              <>
+                <Button size="sm" onClick={() => setFilling({ life: true })}>
+                  回顾人生
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  aria-haspopup="dialog"
+                  onClick={() => setStory(true)}
+                >
+                  看生命线
+                </Button>
+              </>
             ) : profile.canTier ? (
               <Button
                 size="sm"
@@ -653,6 +666,7 @@ export function Overview({ ask }: { ask?: AskPerson }) {
         scope={filling ?? undefined}
         onKept={() => setBuilding(true)}
       />
+      {reviewing && <LifeStory open={story} onOpenChange={setStory} />}
     </div>
   );
 }

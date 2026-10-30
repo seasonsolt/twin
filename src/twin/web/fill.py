@@ -1,10 +1,12 @@
 """Web routes of 补一补 (``/api/persona/fill...``): the questions to answer next, an answer read into draft memories,
 what keeping them is worth, and keeping them in the tier the person chose (see ``persona.fill``). For the person alone:
 what they keep is their own words. 人生回顾 (``/api/persona/life-review...``, see ``persona.life_review``) asks its own
-questions stage by stage and goes on through the same draft, preview and keep."""
+questions stage by stage and goes on through the same draft, preview and keep; 生命叙事 (``/api/persona/life-story``,
+see ``persona.life_story``) lays out what was told year by year."""
 
 from __future__ import annotations
 
+import datetime as dt
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from typing import Annotated, Any, Literal
@@ -14,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..config import Settings
 from ..llm import LLMError
-from ..persona import fill, life_review
+from ..persona import fill, life_review, life_story
 from ..persona.coverage import LEVEL_LABELS, coverage_report
 from ..persona.dimensions import FACET_BY_ID
 from ..persona.profile import consented_facets
@@ -233,3 +235,27 @@ def register(
         with lock, open_store() as store:
             state = life_review.mark(store, body.question, answered=False)
         return {"stages": life_review.progress(state)}
+
+    @app.get("/api/persona/life-story")
+    def life_story_view(request: Request) -> dict[str, Any]:
+        """生命叙事: the person's turning points, stories and what their life has meant, by year, gaps kept as gaps;
+        and the ones whose year their words do not tell."""
+        person(request)
+        with open_store() as store:
+            items = store.list_items()
+        spans, undated = life_story.story(items, dt.date.today())
+
+        def view(p: life_story.Placed) -> dict[str, Any]:
+            facet = FACET_BY_ID[p.item.facet_id]
+            return {
+                "item_id": p.item.item_id,
+                "facet_id": facet.facet_id,
+                "facet_name": facet.name,
+                "statement": p.item.statement,
+                "basis": p.basis,
+            }
+
+        return {
+            "years": [{"year": s.year, "until": s.until, "items": [view(p) for p in s.items]} for s in spans],
+            "undated": [view(p) for p in undated],
+        }

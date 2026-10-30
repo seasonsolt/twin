@@ -80,6 +80,10 @@ SEALED = {
     ("POST", "/api/persona/observations"),
     ("PUT", "/api/persona/observations/{observation_id}/mark"),
     ("PUT", "/api/persona/self-ratings"),
+    # The will is the person's while alive; sealed, it stands as they left it (P2.2).
+    ("POST", "/api/persona/will/heirs"),
+    ("PUT", "/api/persona/will/heirs/{heir_id}"),
+    ("DELETE", "/api/persona/will/heirs/{heir_id}"),
     # 身份、声音和形象
     ("PUT", "/api/identity"),
     ("PUT", "/api/identity/avatar-preset"),

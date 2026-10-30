@@ -168,6 +168,7 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
   → `{heir}`（没有口令或不合要求 400）；`PUT /api/persona/will/heirs/{heir_id}` 同样的字段整份重写，`password` 省略则保留原口令 → `{heir}`，找不到 404；
   `DELETE /api/persona/will/heirs/{heir_id}` → `{ok: true}`，口令哈希一并删掉，历史里仍留着给过他什么；
   `GET /api/persona/will/history` → `{changes: [{at, actor, action, heir_id, changes, heirs}]}`，从旧到新。`actor` 是本人的账号，没有账号时为 `self`。
+  冻结（P2.5）之后遗嘱的增改删和其他写入口一样返回 423：遗嘱停在本人留下的样子；读遗嘱和历史照常。
   受众档过滤（P2.4）和界面（P2.3）还没做：现在遗嘱不影响任何回答。
 - **Time slice（P2.1）**：`ChatBody.as_of: date | None = None`（`YYYY-MM-DD`，网页选年份时取那年 12 月 31 日），
   `POST /api/persona/chat`、`/chat/stream`（含附件）只在本人自己的对话（`assistant`：本人档、本人、不是试问）里用，

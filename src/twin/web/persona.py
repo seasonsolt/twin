@@ -30,7 +30,7 @@ from ..delegations import Asked, Unclear
 from ..embed import Embedder, EmbedError
 from ..handoffs import HandoffDesk
 from ..llm import LLM, Effort
-from ..persona import gate
+from ..persona import gate, lifecycle
 from ..persona.assistant import note_text
 from ..persona.attachments import (
     MAX_CHAT_ATTACHMENT_BYTES,
@@ -57,6 +57,7 @@ from ..persona.dimensions import DIMENSION_BY_ID, DIMENSIONS, FACET_BY_ID, FACET
 from ..persona.items import PersonaItem, PReview
 from ..persona.kernel import KERNEL, rebuild_scope
 from ..persona.ledger import KIND_LABELS as LEDGER_KIND_LABELS
+from ..persona.lifecycle import MemorySealed
 from ..persona.profile import (
     KERNEL_AWAITING_NOTICE,
     KERNEL_STALE_NOTICE,
@@ -470,6 +471,45 @@ class MemoryGateMiddleware:
         await self.app(scope, receive, send)
 
 
+# Writes that grow or change a twin's memory, refused once it is sealed (``persona.lifecycle``): every method but
+# reading, under these prefixes, unless ``SEALED_ALLOWED`` keeps it, so a write added here later is refused too.
+SEALED_PATHS = ("/api/persona", "/api/uploads", "/api/identity", "/api/me", "/api/kernel")
+# Asking the twin, which answers as ever and leaves nothing in its memory (``PersonaChat``).
+SEALED_ALLOWED = ("/api/persona/chat",)
+READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+
+def _under(path: str, prefixes: tuple[str, ...]) -> bool:
+    return any(path == prefix or path.startswith(prefix + "/") for prefix in prefixes)
+
+
+def sealed_write(method: str, path: str) -> bool:
+    """Whether a request of ``method`` to ``path`` is refused by a sealed twin."""
+    return method not in READ_METHODS and _under(path, SEALED_PATHS) and not _under(path, SEALED_ALLOWED)
+
+
+def sealed_response() -> JSONResponse:
+    return JSONResponse({"detail": str(MemorySealed()), "code": MemorySealed.code}, status_code=423)
+
+
+class SealedMiddleware:
+    """Refuse every write to a twin's memory once it is sealed (``sealed_write``); reading it and talking with it go
+    on. The command line, the build and the background work check the seal themselves."""
+
+    def __init__(self, app: ASGIApp, db_path: Path) -> None:
+        self.app, self.db_path = app, db_path
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if (
+            scope["type"] == "http"
+            and sealed_write(str(scope.get("method", "")), str(scope.get("path", "")))
+            and await run_in_threadpool(lifecycle.sealed_path, self.db_path)
+        ):
+            await sealed_response()(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
+
+
 def sse_event(event: str, data: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False, separators=(',', ':'))}\n\n"
 
@@ -516,6 +556,10 @@ def register(
 
     def automatic_build(log: Log) -> dict[str, Any]:
         with open_store() as store:
+            # A build queued before the memory was sealed, or by anything after it, does nothing (``lifecycle``).
+            if lifecycle.sealed(store):
+                log("记忆已冻结，不再整理")
+                return {"sealed": True}
             ids = [
                 s.source_id
                 for s in store.list_sources()
@@ -610,6 +654,14 @@ def register(
 
     def resume_processing() -> None:
         if not settings.db_path.is_file():
+            return
+        with open_store() as store:
+            sealed = lifecycle.sealed(store)
+        if sealed:
+            # Opening the store moved its facet ids to the running taxonomy, without any model call; a sealed memory
+            # is not imported into, extracted or merged again (``lifecycle``). Its retrieval vectors are still brought
+            # up to date: they only find what it holds.
+            resume_index()
             return
         with open_store() as store:
             stale = profile_stale(store)
@@ -1171,13 +1223,15 @@ def register(
     def note_response(note: str, message: str, body: ChatBody, email: str | None) -> StreamingResponse:
         """The person asked the assistant to remember something (``记一下``): it is kept as a note, in the tier that is
         theirs alone until they choose, and answered at once; nothing is asked of the model, so nothing is lost to a
-        reply that did not take it down."""
+        reply that did not take it down. A sealed memory keeps no note and says so."""
 
         def keep() -> dict[str, Any]:
             with open_store() as store:
                 append_user(store, body.conversation_id, email, message, index)
-                payload = chat_payload(store, note_reply(), audience=SELF)
-                payload["note"] = keep_note(store, settings, note)
+                sealed = lifecycle.sealed(store)
+                payload = chat_payload(store, note_reply(sealed), audience=SELF)
+                if not sealed:
+                    payload["note"] = keep_note(store, settings, note)
                 payload["completed_at"] = dt.datetime.now(dt.UTC).isoformat(timespec="milliseconds")
                 return append_reply(store, body.conversation_id, email, payload, index)
 
@@ -1191,7 +1245,8 @@ def register(
             except Exception:
                 yield sse_event("error", {"detail": "没能记下，请重试"})
                 return
-            await off_loop(queue_build)
+            if "note" in final:
+                await off_loop(queue_build)
             yield sse_event("delta", {"text": final["reply"]})
             yield sse_event("final", final)
 

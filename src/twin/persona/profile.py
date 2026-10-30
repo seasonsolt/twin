@@ -36,6 +36,7 @@ from .dimensions import FACET_BY_ID, FACETS, facet_guide, requires_consent
 from .items import FACET_SAMPLE_CHARS, ExtractStats, PersonaCandidate, PersonaItem, PEvidence
 from .kernel import KERNEL, LEGACY_KERNEL, content_digest, kernel_json, rebuild_scope
 from .kernel import PROMPT_VERSION as PROMPT_VERSION
+from .lifecycle import refuse_if_sealed, sealed
 from .schema import Expression, Source, SourceKind, evidence_class
 from .sources import expression_view
 from .store import MERGE_CACHE_PREFIX, PersonaStore
@@ -59,6 +60,9 @@ KERNEL_AWAITING_NOTICE = "记忆内核已升级，需要管理员确认后重新
 
 
 def stale_reason(store: PersonaStore) -> Literal["sources", "kernel", None]:
+    if sealed(store):
+        # As it was when sealed, for good (``lifecycle``).
+        return None
     built_at = store.get_meta("built_at")
     if built_at is None:
         return "sources" if store.count_sources() else None
@@ -834,6 +838,8 @@ def build_profile(
     profile could hold with the person's consent. Production builds derive consent from questionnaires.
     At most ``[kernel] max_concurrent`` model calls are in flight at once, read at every call: the section is the one
     an administrator's change is written into, so raising it speeds up a build already running."""
+    # Whoever starts it, a sealed memory is never extracted or merged again (``lifecycle``).
+    refuse_if_sealed(store)
     report = BuildReport()
     llm = LimitedLLM(llm, lambda: settings.kernel.max_concurrent)
     built = store.kernel_built()

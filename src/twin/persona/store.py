@@ -13,7 +13,7 @@ import shutil
 import sqlite3
 import threading
 import uuid
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -139,6 +139,8 @@ ITEMS_NAMESPACE = "items"
 # A facet's merged batches (``profile.MergeCache``).
 MERGE_CACHE_PREFIX = "merge_batch:"
 SNAPSHOT_KEEP = 3
+# Snapshots kept whatever the count: the one taken as the memory was sealed (``lifecycle.SEAL_SNAPSHOT``).
+KEPT_SNAPSHOT = re.compile(r"-sealed(-\d+)?$")
 
 
 def list_snapshots(db_path: Path) -> list[Path]:
@@ -401,7 +403,9 @@ class PersonaStore:
         prepare_private_file(target)
         with self._lock, closing(sqlite3.connect(target)) as out:
             self._db.backup(out)
-        for old in list_snapshots(self.path)[:-SNAPSHOT_KEEP]:
+        # The snapshot taken as the memory was sealed (``lifecycle.seal``) is the way back from a seal opened by
+        # mistake, so later ones never push it out.
+        for old in [p for p in list_snapshots(self.path) if not KEPT_SNAPSHOT.search(p.stem)][:-SNAPSHOT_KEEP]:
             old.unlink(missing_ok=True)
         return target
 
@@ -1178,6 +1182,11 @@ class PersonaStore:
     def set_meta(self, key: str, value: str) -> None:
         with self._tx() as db:
             db.execute("INSERT OR REPLACE INTO p_meta VALUES (?, ?)", (key, value))
+
+    def set_metas(self, values: Mapping[str, str]) -> None:
+        """Several meta values in one transaction: a reader sees all of them or none."""
+        with self._tx() as db:
+            db.executemany("INSERT OR REPLACE INTO p_meta VALUES (?, ?)", list(values.items()))
 
     def delete_meta(self, key: str) -> None:
         with self._tx() as db:

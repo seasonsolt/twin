@@ -28,6 +28,7 @@ from ..persona.ledger import (
     review_entry,
     thread_root,
 )
+from ..persona.lifecycle import refuse_if_sealed
 from ..persona.schema import LedgerEntry, LedgerKind, LedgerStatus, ReviewStatus
 from ..persona.store import PersonaStore, stored_identity
 from ..persona.tiers import SELF
@@ -205,6 +206,8 @@ def register(app: FastAPI, settings: Settings, backends: Backends, jobs: JobMana
         """Read the meetings not read yet (all of them with ``force``) in the background."""
         force = body.force if body else False
         with open_store() as store:
+            # Also started by the system settings, which the seal's middleware does not stand in front of.
+            refuse_if_sealed(store)
             total, pending = meetings(store)
         if total == 0:
             raise HTTPException(400, "还没有会议：请先添加有本人和其他人发言的录音或转写，并确认哪位是本人")

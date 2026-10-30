@@ -29,6 +29,41 @@ Positioning: Identity → Memory upload → Service. Repository, project, Python
 - **对话不留痕**：`PersonaChat` 在冻结时照常检索和回答，但不写 `p_chat_log`（所以覆盖度的提问需求 `chat_demand` 不再增加）、不产生承诺（`promise_*` 为空，`record_promise` 对冻结的库也什么都不做）；“记一下”回固定的 `SEALED_NOTE_REPLY`“记忆已经冻结，这句不会记下。”，元数据没有 `note`，不新增来源、不排队整理。会话的提问和回答仍存进会话（`conversation_turns`），之后可以翻看。
 - **后台和命令行**：冻结后 `stale_reason` 为 null、`GET /api/status` 的 `kernel.scope` 为 `none`；启动时只做打开数据库时不调用模型的细项编号迁移，不恢复中断的导入、不重新抽取或合并、不排队整理，检索向量照常按当前向量模型补齐（只找已有的内容）。排队中的整理执行时直接返回 `{"sealed": true}`；`build_profile` 对冻结的库抛 `MemorySealed`；录音库不再向冻结的分身写资料；承诺账本的整理（包括系统设置里的升级）被拒。`twin persona import|note|reextract|build` 和 `twin kernel rebuild --persona` 失败退出（“记忆已冻结，不能再改动”），`twin kernel rebuild --all` 跳过冻结的分身；`twin persona chat`、服务接口 `/v1/ask`、MCP 和渠道照常回答，同样不留痕。`twin kernel restore` 不受冻结限制。
 
+## 继承人受众档（P2.4）
+
+- **受众档**（`persona/tiers.py`）：`Audience` 是字符串，`self`、`colleague` 或 `heir:<heir_id>`（`heir_audience` / `heir_of` / `is_heir`）。
+  继承人得到什么由遗嘱定（`HeirGrant`：`facets` 全部给的细项、`single` 其中单独点名的细项、`avoid` 不谈的话题），由 `persona/heirs.py`
+  的 `grant(store, audience)` 读遗嘱得出；本人和同事档返回 null。遗嘱里没有这位继承人（删掉了或编号不对）、或遗嘱读不出来，返回空的
+  `NOTHING`：什么都不给。
+- **条目**（`tiers.heir_usable`）：细项在 `facets` 里才给；细项的默认档是对同事说的，不影响继承人（遗嘱给了家庭，家庭的条目就给）；
+  本人逐条标了“只有本人能用”的条目（`p_item_tiers` 里是 `self`）不给，**除非**遗嘱单独点名了它的细项（`facets` 字段，而不是整个方面）。
+  `tiers.for_audience(items, overrides, audience, grant)`：继承人档不传 `grant` 时一条都不给。`PersonaStore.query_items` /
+  `item_counts` 多 `grant` 参数，SQL 条件与 `heir_usable` 相同（`_audience_sql`），不传同样什么都不给。
+- **原话**（`tiers.heir_words`）：继承人只看得到给他的条目（复核为拒绝的除外）所依据的原话，`PrivateWords.allowed` 是白名单，其余一律算隐藏：
+  不站在任何条目下的话、别人说的话（除非是给他的条目的依据）、不给的条目的依据都不给。本人“只有本人能用”的笔记（`note_tier`）的话，
+  只有单独点名的细项的条目才能带出来。`heirs.hidden_words(store, audience)` 按档给出隐藏的原话（本人无、同事 `private_words`、继承人 `heir_words`）。
+- **不谈的话题**（`persona/heirs.py`）：词面先拦（`topic_terms`：按“的、和、关于、……的事”等虚词切开，留两个字以上的部分，三个字以上的中文
+  再加末两字，例如“前一段婚姻”→“前一段婚姻”“婚姻”；只有一个字时用这个字；英文按整词；宁可多拦），向量补充（向量服务可用时，问题或候选与
+  任一话题的余弦 ≥ `TOPIC_SIMILARITY` = 0.6；不可用时只靠词面）。
+  - 提问：`PersonaChat.reply` / `stream_reply` 在危机护栏之后、其他一切之前，看最近两条提问（检索用的就是它们）是否命中，命中回固定的
+    `AVOIDED_REPLY`“这件事{本人名字}生前交代过，不和你谈。我们聊点别的吧。”（`mode=general`，无引用、无检索、不调用模型、不记 `p_chat_log`，
+    不说是哪个话题）。危机护栏仍在最前面。
+  - 检索结果：继承人的检索材料里，条目（陈述和引文）、本人原话、别人的话按词面和向量命中的都去掉；条目证据里按向量去掉的原话也去掉。
+    `heirs.usable_items` 在网页的条目、覆盖度、生命线里按词面去掉命中的条目。
+  - 提示词：`chat_system_prompt` 在 `ctx.avoid` 非空时加“## 不谈的话题”一节，列出话题，要求不谈、不暗示、不自己说出话题名。
+- **继承人的对话**：没有承诺账本、没有本人助手、`reach` 为 `none`（不转交、不显示团队答案）、不给会议纪要（`_minutes` 的纪要不站在任何细项下）；
+  引用只留检索到的编号（`ctx.ids`），`cited_view` 再按继承人档过滤一次，伪造的编号不显示。检索材料按记忆版本缓存，遗嘱不在记忆版本里，
+  所以 `HeirGrant` 是缓存键的一部分：改遗嘱后下一个问题就按新遗嘱答。
+- **网页**：请求的 `scope["twin_heir"]`（`conversations.HEIR_SCOPE`，P2.7 开启后设置）是继承人编号时，`request_audience` 是 `heir:<id>`，
+  优先于其他一切；`owner(request)` 也是 `heir:<id>`，所以每位继承人只看得到自己的会话，也打不开本人或别人的会话（404）。团队库的会话索引只认
+  `self` / `colleague`，继承人的会话记成 `colleague`（`heirs.tier_only`），回答时 `ConversationIndex.audience` 一律按请求里的继承人档。
+  `HeirMiddleware`（主应用里，紧挨登录之后、分身路由之前）对继承人的 API 请求**默认拒绝**，403 `{"detail": "这里只有本人能看", "code": "heir_forbidden"}`，
+  只放过 `web/persona.py` 的 `HEIR_ALLOWED`（清单在 `tests/test_heirs.py` 里和全部路由核对）：
+  `POST /api/persona/chat`、`/chat/stream`；`GET /api/persona/items`、`/items/search`、`/items/summary`（按遗嘱、去掉不谈话题的条目计数；
+  搜索的词本身命中不谈的话题时返回空）；`GET /api/persona/sources/{id}/text`（只留给他的原话，没有一句时 404）；`GET /api/persona/coverage`
+  （按给他的条目算，不带提问需求）；`GET /api/persona/life-story`（同上，本人以外只有继承人能读）；`/api/conversations` 的列表、新建、读、改名、删除。
+  页面和静态资源不受影响。
+
 ## Identity 与用户建档
 
 - `identity`（代码层 1）是无 I/O 的冻结契约：`name: str`、`aliases: list[str]`、
@@ -169,7 +204,7 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
   `DELETE /api/persona/will/heirs/{heir_id}` → `{ok: true}`，口令哈希一并删掉，历史里仍留着给过他什么；
   `GET /api/persona/will/history` → `{changes: [{at, actor, action, heir_id, changes, heirs}]}`，从旧到新。`actor` 是本人的账号，没有账号时为 `self`。
   冻结（P2.5）之后遗嘱的增改删和其他写入口一样返回 423：遗嘱停在本人留下的样子；读遗嘱和历史照常。
-  受众档过滤（P2.4）和界面（P2.3）还没做：现在遗嘱不影响任何回答。
+  继承人按遗嘱得到什么见“继承人受众档（P2.4）”；界面（P2.3）另做。
 - **Time slice（P2.1）**：`ChatBody.as_of: date | None = None`（`YYYY-MM-DD`，网页选年份时取那年 12 月 31 日），
   `POST /api/persona/chat`、`/chat/stream`（含附件）只在本人自己的对话（`assistant`：本人档、本人、不是试问）里用，
   传给 `PersonaChat.reply` / `stream_reply` 的 `as_of`；别人的对话和试问忽略它，按现在答（回答的 `as_of` 为 null）。

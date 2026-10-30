@@ -4,8 +4,11 @@ The tier of an item is its facet's default (``DEFAULT_TIERS``) unless the person
 stored (``PersonaStore.item_tiers``). The defaults live here, apart from ``dimensions.py`` and outside the kernel's
 fingerprints on purpose: moving a facet to another tier changes nothing that was extracted, so it must not make every
 store rebuild its memories. ``audience`` is the tier a conversation answers from, fixed when it is created: a
-conversation of the person themself ("self") may use every item, any other ("colleague") only the colleague tier,
-and not the words only such items stand on (``private_expressions``).
+conversation of the person themself ("self") may use every item, a colleague's ("colleague") only the colleague tier,
+and not the words only such items stand on (``private_expressions``). An heir's ("heir:<heir_id>", P2.4) uses what
+the person's will gives that heir (``HeirGrant``, resolved by ``persona.heirs``): the tiers above are about
+colleagues and do not decide it, except that an item the person themself marked as only theirs stays theirs unless
+the will names its facet singly (``heir_usable``); with no grant, or an empty one, an heir is given nothing.
 """
 
 from __future__ import annotations
@@ -19,11 +22,41 @@ from .items import PersonaItem
 from .schema import ReviewStatus
 
 Tier = Literal["colleague", "self"]
-Audience = Literal["colleague", "self"]
+# "colleague", "self", or "heir:" and the id of an heir in the person's will (``heir_audience``).
+Audience = str
 COLLEAGUE: Tier = "colleague"
 SELF: Tier = "self"
 TIERS: tuple[Tier, ...] = (COLLEAGUE, SELF)
 TIER_LABELS: dict[Tier, str] = {COLLEAGUE: "同事能用", SELF: "只有本人能用"}
+HEIR_PREFIX = "heir:"
+
+
+def heir_audience(heir_id: str) -> Audience:
+    """The audience of a conversation of the heir ``heir_id``."""
+    return HEIR_PREFIX + heir_id
+
+
+def heir_of(audience: Audience) -> str | None:
+    """The heir an audience is of; None for the person and their colleagues."""
+    return audience[len(HEIR_PREFIX) :] if audience.startswith(HEIR_PREFIX) else None
+
+
+def is_heir(audience: Audience) -> bool:
+    return heir_of(audience) is not None
+
+
+@dataclass(frozen=True)
+class HeirGrant:
+    """What the will gives one heir (``persona.will``): every facet given (``facets``), those of them named singly
+    (``single``), which also open the items the person marked as only theirs, and the topics never to be talked about
+    (``avoid``). The empty grant gives nothing: an heir the will no longer names, or a will that cannot be read."""
+
+    facets: frozenset[str] = frozenset()
+    single: frozenset[str] = frozenset()
+    avoid: tuple[str, ...] = ()
+
+
+NOTHING = HeirGrant()
 
 # Work views, abilities, speech and how the person deals with people are fair for a colleague to ask about; family,
 # health, daily habits, tastes and what is still on the person's mind are theirs. Hobbies and tastes (9.1, 9.5) are
@@ -47,14 +80,29 @@ def item_tier(item: PersonaItem, overrides: Mapping[str, str]) -> Tier:
 
 
 def usable(tier: Tier, audience: Audience) -> bool:
-    """Whether a conversation of ``audience`` may use an item of ``tier``."""
-    return audience == SELF or tier == COLLEAGUE
+    """Whether a conversation of ``audience`` may use an item of ``tier``; an heir's is decided by the will
+    (``heir_usable``), not by the tier, so this is never true for one."""
+    return audience == SELF or (audience == COLLEAGUE and tier == COLLEAGUE)
 
 
-def for_audience(items: Iterable[PersonaItem], overrides: Mapping[str, str], audience: Audience) -> list[PersonaItem]:
-    """The items a conversation of ``audience`` may use."""
+def heir_usable(item: PersonaItem, overrides: Mapping[str, str], grant: HeirGrant) -> bool:
+    """Whether an heir with ``grant`` may use the item: its facet is given, and the person did not mark the item as
+    only theirs, unless the will names its facet singly. A facet's default tier is about colleagues and does not count:
+    a will that gives family gives the family items, which are the person's own by default."""
+    if item.facet_id not in grant.facets:
+        return False
+    return overrides.get(item.item_id) != SELF or item.facet_id in grant.single
+
+
+def for_audience(
+    items: Iterable[PersonaItem], overrides: Mapping[str, str], audience: Audience, grant: HeirGrant | None = None
+) -> list[PersonaItem]:
+    """The items a conversation of ``audience`` may use; an heir's those ``grant`` gives (none without one). Anything
+    but the person themself, a colleague or an heir is given what a colleague is."""
     if audience == SELF:
         return list(items)
+    if is_heir(audience):
+        return [i for i in items if heir_usable(i, overrides, grant or NOTHING)]
     return [i for i in items if item_tier(i, overrides) == COLLEAGUE]
 
 
@@ -78,22 +126,44 @@ def private_expressions(items: Iterable[PersonaItem], overrides: Mapping[str, st
 class PrivateWords:
     """The words a conversation of the colleague tier may not be shown: expressions only the person's own items stand
     on (``private_expressions``), and every expression of a note the person kept to themself (``note_tier``), found
-    or not yet standing under any item. An expression's id starts with its source's id."""
+    or not yet standing under any item. An expression's id starts with its source's id. ``allowed``, for an heir
+    (``heir_words``), turns it around: every word not in it is hidden too."""
 
     ids: frozenset[str] = frozenset()
     sources: frozenset[str] = frozenset()
+    allowed: frozenset[str] | None = None
 
     def __contains__(self, ref: object) -> bool:
-        return isinstance(ref, str) and (ref in self.ids or ref.split("#", 1)[0] in self.sources)
+        if not isinstance(ref, str):
+            return False
+        if ref in self.ids or ref.split("#", 1)[0] in self.sources:
+            return True
+        return self.allowed is not None and ref not in self.allowed
 
     def __bool__(self) -> bool:
-        return bool(self.ids or self.sources)
+        return bool(self.ids or self.sources) or self.allowed is not None
 
 
 def private_words(
     items: Iterable[PersonaItem], overrides: Mapping[str, str], private_sources: Collection[str] = ()
 ) -> PrivateWords:
     return PrivateWords(frozenset(private_expressions(items, overrides)), frozenset(private_sources))
+
+
+def heir_words(
+    items: Iterable[PersonaItem], overrides: Mapping[str, str], grant: HeirGrant, private_sources: Collection[str] = ()
+) -> PrivateWords:
+    """The words an heir may be shown, as the only ones (``PrivateWords.allowed``): the evidence of the items the will
+    gives them (``heir_usable``), rejected items opening none. Words standing under no such item, what other people
+    said included, are not given: the will gives facets, and they are of none it names. A note the person kept to
+    themself opens only through an item of a facet the will names singly."""
+    allowed: set[str] = set()
+    for item in items:
+        if item.review is ReviewStatus.REJECTED or not heir_usable(item, overrides, grant):
+            continue
+        single = item.facet_id in grant.single
+        allowed.update(e.expression_id for e in item.evidence if single or e.source_id not in private_sources)
+    return PrivateWords(allowed=frozenset(allowed))
 
 
 def note_item_tier(item: PersonaItem, notes: Mapping[str, str]) -> Tier | None:

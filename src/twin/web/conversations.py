@@ -16,8 +16,9 @@ from ..config import Settings
 from ..handoffs import HandoffDesk
 from ..persona import self_ratings
 from ..persona.assistant import annotate_notes, annotate_promises, record_promise
+from ..persona.heirs import tier_only
 from ..persona.store import PersonaStore
-from ..persona.tiers import COLLEAGUE, SELF, Audience
+from ..persona.tiers import COLLEAGUE, SELF, Audience, heir_audience, is_heir
 from ..persona.work import WorkStore, summary_view
 from ..teamdb import HandoffStatus, TeamDB, Via
 from .personas import Personas
@@ -56,13 +57,30 @@ class RenameBody(BaseModel):
         return value.strip()
 
 
+# The scope key naming the heir a request comes from (P2.7 sets it once an heir opens the twin); it wins over
+# everything else the request says of who is asking.
+HEIR_SCOPE = "twin_heir"
+
+
+def request_heir(request: Request) -> str | None:
+    """The heir the request comes from, if any (``HEIR_SCOPE``)."""
+    heir_id = request.scope.get(HEIR_SCOPE)
+    return heir_id if isinstance(heir_id, str) and heir_id else None
+
+
 def owner(request: Request) -> str | None:
+    """Whose conversations a request reads and writes: the signed-in account's, or an heir's own, which nobody else
+    sees and which see nobody else's, whatever account the heir's browser is signed in with."""
+    if (heir_id := request_heir(request)) is not None:
+        return heir_audience(heir_id)
     return request.scope["twin_identity"]["email"]  # type: ignore[no-any-return]
 
 
 def request_audience(request: Request) -> Audience:
-    """The tier this signed-in person's conversations with the twin answer from (``Personas.audience``); the colleague
-    tier where nothing says otherwise."""
+    """The tier this signed-in person's conversations with the twin answer from (``Personas.audience``); an heir's
+    (``heir:<id>``) for a request from an heir; the colleague tier where nothing says otherwise."""
+    if (heir_id := request_heir(request)) is not None:
+        return heir_audience(heir_id)
     return SELF if request.scope.get("twin_audience") == SELF else COLLEAGUE
 
 
@@ -99,7 +117,7 @@ class ConversationIndex:
                 conversation_id,
                 self.persona_id,
                 asker,
-                audience,
+                tier_only(audience),
                 head[1],
                 head[2],
                 asker_name=asker_name,
@@ -128,8 +146,9 @@ class ConversationIndex:
     def audience(self, conversation_id: str | None, current: Audience) -> Audience:
         """The tier a chat answers from: the one the conversation was created with, but never more than the asker may
         have now (a person who gave the twin back no longer sees their own tier in it). A conversation the index does
-        not know, or any failure to read it, is the colleague tier."""
-        if conversation_id is None:
+        not know, or any failure to read it, is the colleague tier. An heir's is always the heir's own, whatever
+        conversation it names: the index keeps no more of it than the colleague tier (``heirs.tier_only``)."""
+        if conversation_id is None or is_heir(current):
             return current
         try:
             stored = self.team.audience_of(conversation_id, persona_id=self.persona_id)

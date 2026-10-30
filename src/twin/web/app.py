@@ -470,6 +470,8 @@ def create_app(
     }
     auth.public = lambda: {"team_name": system_settings.team_name()}
     app.add_middleware(PersonaMiddleware, registry=registry)
+    # An heir reaches only what is meant for them (P2.4), whether a twin's route or the app's own.
+    app.add_middleware(persona.HeirMiddleware)
     # Between sign-in and the twin's own routes, which PersonaMiddleware calls directly.
     app.add_middleware(system.FeatureGate, system=system_settings)
     app.add_middleware(AuthMiddleware, auth=auth)

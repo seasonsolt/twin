@@ -43,6 +43,7 @@ from .connect import connect
 from .crisis import crisis_reply, in_crisis
 from .derive import derive, needs_derivation
 from .dimensions import DIMENSIONS, FACET_BY_ID, FACETS
+from .heirs import avoided, avoided_reply, close_to, embed_topics, grant, item_words, mentions
 from .items import PersonaItem, item_as_of
 from .ledger import KIND_LABELS, SELF, STATUS_LABELS, for_chat
 from .lexical import BM25, cached, tokenize
@@ -67,7 +68,17 @@ from .schema import (
 from .sources import ExpressionView
 from .store import PersonaStore
 from .style import extreme_rate
-from .tiers import COLLEAGUE, Audience, PrivateWords, for_audience, private_words
+from .tiers import (
+    COLLEAGUE,
+    NOTHING,
+    Audience,
+    HeirGrant,
+    PrivateWords,
+    for_audience,
+    heir_words,
+    is_heir,
+    private_words,
+)
 from .tiers import SELF as SELF_AUDIENCE
 from .when import meeting_window, time_window
 
@@ -385,6 +396,8 @@ class PersonaContext:
     team_answers: list[str] = field(default_factory=list)
     # Who is asking (``Asker``); None where nobody is known, as for a channel, an agent or a service without sign-in.
     asker: Asker | None = None
+    # The topics the person's will says never to talk about with the heir asking (``persona.heirs``).
+    avoid: tuple[str, ...] = ()
 
     # Citable ids an answer can rest on without lowering its confidence: items standing on the person's own words or
     # reviewed by them, and the person's own words.
@@ -691,6 +704,30 @@ def _passage_lines(passage: Passage) -> list[tuple[Expression, str]]:
     return shown
 
 
+def _other_text(e: Expression) -> str:
+    return e.text
+
+
+def _off_topic[T](
+    candidates: dict[str, T],
+    text: Callable[[T], str],
+    vectors: tuple[list[str], Matrix],
+    topics: Sequence[str],
+    topic_vectors: Matrix | None,
+) -> dict[str, T]:
+    """``candidates`` without those about any of ``topics``: by their words (``heirs.mentions``), then by meaning when
+    the topics could be embedded and the candidate has a stored vector (``heirs.close_to``)."""
+    kept = {ref: c for ref, c in candidates.items() if not mentions(text(c), topics)}
+    if topic_vectors is None or not kept:
+        return kept
+    ids, matrix = vectors
+    rows = [n for n, ref in enumerate(ids) if ref in kept]
+    if not rows or matrix.shape[1] != topic_vectors.shape[1]:
+        return kept
+    near = close_to(matrix[rows], topic_vectors)
+    return {ref: c for ref, c in kept.items() if ref not in {ids[n] for n, hit in zip(rows, near, strict=True) if hit}}
+
+
 def _family(store: PersonaStore, namespace: str, *view: object) -> Hashable:
     """Which kept keyword index a namespace's candidates update: one per twin, namespace and view (the audience, the
     date answered as of), so conversations of different tiers do not undo each other's changes."""
@@ -708,11 +745,18 @@ def search_items(
     """The person's items closest to ``query``, ranked the way chat retrieval ranks them (meaning and keywords, RRF),
     so searching shows what the twin would draw on; keywords also reach the evidence quotes. Reviews are applied and
     rejected items left out, and so are those ``audience`` may not use. With no ``embedder`` (or no stored vectors)
-    only keywords rank, and only matches count.
+    only keywords rank, and only matches count. An heir finds nothing about a topic not to be talked about, and
+    nothing at all when the search is about one.
     """
-    items = {i.item_id: i for i in for_audience(store.list_items(), store.item_tiers(), audience)}
+    given = grant(store, audience)
+    if given is not None and avoided(query, given.avoid, embedder):
+        return []
+    items = {i.item_id: i for i in for_audience(store.list_items(), store.item_tiers(), audience, given)}
     vector = embedder.embed([_clip(query, 2000)])[0] if embedder is not None else np.zeros(0, dtype=np.float32)
     vectors = _space_vectors(store, ITEMS_NS, embedder_fingerprint(embedder) if embedder is not None else None)
+    if given is not None and given.avoid:
+        topics = embed_topics(embedder, given.avoid)
+        items = _off_topic(items, item_words, vectors, given.avoid, topics)
 
     def text(i: PersonaItem) -> str:
         return "\n".join([item_text(i), *(e.quote for e in i.evidence)])
@@ -801,7 +845,10 @@ class PersonaChat:
         only the self tier has one. ``asker``: who is asking, so the twin can say whom it is talking to.
         ``reflection``: a way of talking with the assistant about oneself (``persona.reflection``); only the
         assistant has them. A message that speaks of ending one's life or harming oneself is answered by the crisis
-        guard (``persona.crisis``) before anything else, whoever asks. A twin whose memory is sealed
+        guard (``persona.crisis``) before anything else, whoever asks. An heir's conversation (``heir:<id>``) uses only
+        what the person's will gives that heir (``persona.heirs``), and a question about a topic the will says not to
+        talk about is answered by a fixed reply before anything is looked up or any model asked, right after the crisis
+        guard. A twin whose memory is sealed
         (``persona.lifecycle``) answers as ever but leaves nothing in it: no question logged, no promise kept."""
         self.audience = audience
         self.asker = asker
@@ -850,12 +897,15 @@ class PersonaChat:
         while the twin's memory is unchanged, since reading a large memory again takes longer than the rest of an
         answer."""
         path = str(self.store.path)
+        # The will is not part of the memory's revision: what it gives is part of the key instead.
+        given = grant(self.store, self.audience)
         key = (
             None
             if path in ("", ":memory:")
             else (
                 str(self.store.path.resolve()),
                 self.audience,
+                given,
                 as_of,
                 self.meeting_record,
                 embedder_fingerprint(self.embedder),
@@ -865,9 +915,9 @@ class PersonaChat:
                 tuple(self.settings.target_aliases),
             )
         )
-        return _keep(key, self.store.memory_revision, partial(self._read_material, as_of))
+        return _keep(key, self.store.memory_revision, partial(self._read_material, as_of, given))
 
-    def _read_material(self, as_of: dt.date | None) -> _Material:
+    def _read_material(self, as_of: dt.date | None, given: HeirGrant | None = None) -> _Material:
         # One read of the corpus serves the evidence quotes, the person's own words and other people's.
         view = ExpressionView(self.store, self.settings)
         meetings = {s.source_id: s.title for s in view.sources.values() if s.kind in MEETING_KINDS}
@@ -878,8 +928,8 @@ class PersonaChat:
             e.model_copy(update={"date": days[e.source_id]}) if e.date is None and e.source_id in days else e
             for e in view.corpus
         ]
-        hidden = self._private_expressions()
-        items = self._items(as_of, view, hidden)
+        hidden = self._private_expressions(given)
+        items = self._items(as_of, view, hidden, given)
         expressions = {
             e.expression_id: e for e in view.select(target_only=True, until=as_of) if e.expression_id not in hidden
         }
@@ -889,9 +939,30 @@ class PersonaChat:
             if ref not in hidden
         }
         fingerprint = embedder_fingerprint(self.embedder)
+        if given is not None and given.avoid:
+            # What speaks of a topic not to be talked about with this heir is not found at all.
+            topics, avoid = embed_topics(self.embedder, given.avoid), given.avoid
+            said_before = set(expressions)
+            items = _off_topic(items, item_words, _space_vectors(self.store, ITEMS_NS, fingerprint), avoid, topics)
+            expressions = _off_topic(
+                expressions, expression_text, _space_vectors(self.store, EXPRESSIONS_NS, fingerprint), avoid, topics
+            )
+            kept = _off_topic(others, _other_text, _space_vectors(self.store, OTHERS_NS, fingerprint), avoid, topics)
+            dropped = {
+                *(ref for ref in said_before if ref not in expressions),
+                *(ref for ref in others if ref not in kept),
+            }
+            others = kept
+            # An item still quoting words left out by their meaning alone does not show them.
+            items = {
+                ref: i.model_copy(update={"evidence": [e for e in i.evidence if e.expression_id not in dropped]})
+                if any(e.expression_id in dropped for e in i.evidence)
+                else i
+                for ref, i in items.items()
+            }
         core, voice = self._portrait(list(items.values()), list(expressions.values()))
         surveys = {s.source_id for s in self.store.list_sources(SourceKind.QUESTIONNAIRE)}
-        view_of = (self.audience, as_of)
+        view_of = (self.audience, given, as_of)
 
         def corpus[T](namespace: str, candidates: dict[str, T], text: Callable[[T], str]) -> _Corpus[T]:
             vectors = _space_vectors(self.store, namespace, fingerprint)
@@ -983,7 +1054,8 @@ class PersonaChat:
             assistant=self.assistant,
             reflection=self.reflection,
             passages=passages,
-            minutes=self._minutes(material, named) if named is not None else [],
+            # A meeting's minutes stand under no facet the will could give an heir.
+            minutes=self._minutes(material, named) if named is not None and not is_heir(self.audience) else [],
         )
 
     def _minutes(self, material: _Material, named: tuple[dt.date, dt.date]) -> list[MeetingMinutes]:
@@ -1014,14 +1086,16 @@ class PersonaChat:
                 shown.append(MeetingMinutes(material.meetings[sid], day, tuple(points), minutes.origin))
         return shown[::-1]
 
-    def _items(self, as_of: dt.date | None, view: ExpressionView, hidden: PrivateWords) -> dict[str, PersonaItem]:
-        """The profile items an answer may use: those of the conversation's tier, without the evidence of ``hidden``
-        words (an item opened to colleagues may still quote a note kept private, whose quote the prompt would show);
-        none for a meeting record, whose portrait is not yet trusted."""
+    def _items(
+        self, as_of: dt.date | None, view: ExpressionView, hidden: PrivateWords, given: HeirGrant | None = None
+    ) -> dict[str, PersonaItem]:
+        """The profile items an answer may use: those of the conversation's tier (an heir's: those ``given``), without
+        the evidence of ``hidden`` words (an item opened to colleagues may still quote a note kept private, whose quote
+        the prompt would show); none for a meeting record, whose portrait is not yet trusted."""
         if self.meeting_record:
             return {}
         items = for_audience(
-            _visible_items(self.store, self.settings, as_of, view), self.store.item_tiers(), self.audience
+            _visible_items(self.store, self.settings, as_of, view), self.store.item_tiers(), self.audience, given
         )
         if hidden:
             items = [
@@ -1032,14 +1106,21 @@ class PersonaChat:
             ]
         return {i.item_id: i for i in items}
 
-    def _private_expressions(self) -> PrivateWords:
+    def _private_expressions(self, given: HeirGrant | None = None) -> PrivateWords:
         """The words this conversation may not be shown because only items of a tier it may not use stand on them, or
-        because they are in a note the person kept to themself (none for the person's own conversation)."""
+        because they are in a note the person kept to themself (none for the person's own conversation); for an
+        heir's, every word but those of the items ``given`` (``tiers.heir_words``)."""
         if self.audience == SELF_AUDIENCE:
             return PrivateWords()
-        return private_words(
-            self.store.list_items(include_rejected=True), self.store.item_tiers(), self.store.private_note_sources()
-        )
+        items = self.store.list_items(include_rejected=True)
+        if is_heir(self.audience):
+            return heir_words(
+                items,
+                self.store.item_tiers(),
+                given or grant(self.store, self.audience) or NOTHING,
+                self.store.private_note_sources(),
+            )
+        return private_words(items, self.store.item_tiers(), self.store.private_note_sources())
 
     def _portrait(
         self, items: Sequence[PersonaItem], expressions: Sequence[Expression]
@@ -1059,9 +1140,10 @@ class PersonaChat:
     def portrait(self) -> tuple[list[PersonaItem], list[str]]:
         """What every chat prompt carries whatever is asked: the core items and the voice samples."""
         view = ExpressionView(self.store, self.settings)
-        hidden = self._private_expressions()
+        given = grant(self.store, self.audience)
+        hidden = self._private_expressions(given)
         said = [e for e in view.select(target_only=True) if e.expression_id not in hidden]
-        return self._portrait(list(self._items(None, view, hidden).values()), said)
+        return self._portrait(list(self._items(None, view, hidden, given).values()), said)
 
     def reply(
         self,
@@ -1081,6 +1163,8 @@ class PersonaChat:
             raise ValueError("the last message must be the user's")
         if in_crisis(messages[-1].content):
             return crisis_reply()
+        if (refused := self._avoided_reply(messages)) is not None:
+            return refused
         if persist and (unbuilt := self._unbuilt_reply(as_of)) is not None:
             return unbuilt
         if sliced and not attachments and (early := self._before_anything(as_of)) is not None:
@@ -1120,6 +1204,10 @@ class PersonaChat:
             crisis = crisis_reply()
             yield crisis.reply
             yield crisis
+            return
+        if (refused := await off_loop(partial(self._avoided_reply, messages))) is not None:
+            yield refused.reply
+            yield refused
             return
         # Every store read and write runs off the event loop, which other requests share.
         if persist and (unbuilt := await off_loop(partial(self._unbuilt_reply, as_of))) is not None:
@@ -1212,6 +1300,17 @@ class PersonaChat:
         ctx.attachments = list(attachments)
         ctx.ids.update(passage.citation_id for passage in attachments)
 
+    def _avoided_reply(self, messages: Sequence[ChatTurn]) -> ChatReply | None:
+        """For an heir, the fixed reply when the question (the latest two turns, which retrieval would look up) speaks
+        of a topic the will says not to talk about with them; None otherwise, and always for anyone else."""
+        if not is_heir(self.audience):
+            return None
+        given = grant(self.store, self.audience)
+        asked = "\n".join([m.content for m in messages if m.role == "user"][-2:])
+        if given is None or not avoided(asked, given.avoid, self.embedder):
+            return None
+        return avoided_reply(self.store.get_meta("identity:name") or self.settings.target_name)
+
     def _unbuilt_reply(self, as_of: dt.date | None) -> ChatReply | None:
         """The reply while nothing has been built yet; None once there is a profile to answer from."""
         if not self.store.has_items() and self.store.get_meta("built_at") is None:
@@ -1262,6 +1361,8 @@ class PersonaChat:
                 # Either failing leaves keywords to rank alone.
                 vectors = None if vectors is None or more is None else np.vstack([vectors, more])
         ctx = self._ranked(material, vectors, query, as_of, found.hints, found.alternatives, today)
+        if (given := grant(self.store, self.audience)) is not None:
+            ctx.avoid = given.avoid
         ctx.reach = self.reach
         ctx.asker = self.asker
         ctx.owner_cue = owner_cue
@@ -1665,6 +1766,12 @@ PERSON_ASKING_SECTION = """
 ## 和我聊的人
 对方就是{name}本人，在试和自己说话的效果。问到对方是谁时，直接说出他就是{name}本人；其余照常像{name}那样作答。"""
 
+AVOID_SECTION = """
+
+## 不谈的话题
+{name}生前交代过，下面这些事不和对方谈：{topics}。问到或者聊到它们时，只说这件事生前交代过、不谈，
+不透露、不暗示任何相关的内容，也不要自己说出这些话题的名字。"""
+
 UNCLAIMED_SECTION = """
 
 ## 这个分身还没有人认领
@@ -1748,6 +1855,8 @@ def chat_system_prompt(name: str, ctx: PersonaContext) -> str:
         prompt += UNCLAIMED_SECTION.format(name=name)
     if ctx.owner_said:
         prompt += OWNER_SAID_SECTION
+    if ctx.avoid:
+        prompt += AVOID_SECTION.format(name=name, topics="；".join(ctx.avoid))
     return prompt + team + _attachment_section(ctx)
 
 

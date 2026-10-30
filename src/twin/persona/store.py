@@ -35,7 +35,19 @@ from .kernel import (
     taxonomy_plan,
 )
 from .schema import ChatReply, Expression, LedgerEntry, ParsedSource, ReviewStatus, Source, SourceKind
-from .tiers import COLLEAGUE, DEFAULT_TIERS, SELF, TIERS, Audience, Tier, carry_tiers, note_item_tier
+from .tiers import (
+    COLLEAGUE,
+    DEFAULT_TIERS,
+    NOTHING,
+    SELF,
+    TIERS,
+    Audience,
+    HeirGrant,
+    Tier,
+    carry_tiers,
+    is_heir,
+    note_item_tier,
+)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS p_sources (
@@ -127,6 +139,26 @@ _MIGRATIONS: tuple[str, ...] = (
 # own (digits and a dot), never input.
 _SELF_FACETS_SQL = ",".join(f"'{f}'" for f, tier in sorted(DEFAULT_TIERS.items()) if tier == "self")
 _TIER_SQL = f"COALESCE(t.tier, CASE WHEN i.facet_id IN ({_SELF_FACETS_SQL}) THEN 'self' ELSE 'colleague' END)"
+
+
+def _audience_sql(audience: Audience, grant: HeirGrant | None) -> tuple[str, list[object]]:
+    """The condition on items ``i`` (with their tier ``t``) a conversation of ``audience``, not the person, may use, as
+    ``tiers.for_audience`` decides it: a colleague's the colleague tier, an heir's what ``grant`` gives (nothing
+    without one)."""
+    if not is_heir(audience):
+        return f"{_TIER_SQL} = 'colleague'", []
+    given = grant or NOTHING
+    if not given.facets:
+        return "0", []
+    facets, single = sorted(given.facets), sorted(given.single)
+    marked = (
+        f"COALESCE(t.tier, '') != 'self' OR i.facet_id IN ({','.join('?' * len(single))})"
+        if single
+        else ("COALESCE(t.tier, '') != 'self'")
+    )
+    return f"(i.facet_id IN ({','.join('?' * len(facets))}) AND ({marked}))", [*facets, *single]
+
+
 SNAPSHOT_DIR = "kernel-snapshots"
 # The taxonomy the stored facet ids belong to (``_migrate_taxonomy``).
 TAXONOMY_META = "taxonomy:facets"
@@ -961,11 +993,13 @@ class PersonaStore:
         limit: int | None = None,
         offset: int = 0,
         audience: Audience = SELF,
+        grant: HeirGrant | None = None,
     ) -> tuple[list[PersonaItem], int]:
         """One page of items with reviews applied, filtered in SQL, and the number of items matching the filters.
         ``text`` matches the statement as shown (the edited one after an edit) and the evidence quotes;
         ``source_id`` keeps items with evidence from that source; ``conflict`` keeps items whose evidence disagrees;
-        ``by_evidence`` puts the best-supported first; ``audience`` leaves out the items it may not use."""
+        ``by_evidence`` puts the best-supported first; ``audience`` leaves out the items it may not use (for an heir,
+        those ``grant`` does not give, ``tiers.heir_usable``)."""
         status = f"COALESCE(json_extract(r.json, '$.status'), '{ReviewStatus.UNREVIEWED.value}')"
         clauses: list[str] = []
         params: list[object] = []
@@ -995,7 +1029,9 @@ class PersonaStore:
         if conflict:
             clauses.append("COALESCE(json_extract(i.json, '$.conflict'), '') != ''")
         if audience != SELF:
-            clauses.append(f"{_TIER_SQL} = 'colleague'")
+            clause, values = _audience_sql(audience, grant)
+            clauses.append(clause)
+            params += values
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         order = "json_array_length(i.json, '$.evidence') DESC, i.item_id" if by_evidence else "i.facet_id, i.item_id"
         base = (
@@ -1014,14 +1050,18 @@ class PersonaStore:
         ]
         return items, total
 
-    def item_counts(self, audience: Audience = SELF) -> dict[tuple[str, ReviewStatus], int]:
-        """Item counts per facet and review status (rejected items included), of the items ``audience`` may use."""
-        only = "" if audience == SELF else f" WHERE {_TIER_SQL} = 'colleague'"
+    def item_counts(
+        self, audience: Audience = SELF, grant: HeirGrant | None = None
+    ) -> dict[tuple[str, ReviewStatus], int]:
+        """Item counts per facet and review status (rejected items included), of the items ``audience`` may use (an
+        heir's, those ``grant`` gives)."""
+        only, params = ("", []) if audience == SELF else _audience_sql(audience, grant)
         with self._lock:
             rows = self._db.execute(
                 f"SELECT i.facet_id, COALESCE(json_extract(r.json, '$.status'), '{ReviewStatus.UNREVIEWED.value}'), "
                 "COUNT(*) FROM known_items i LEFT JOIN p_reviews r ON r.item_id = i.item_id "
-                f"LEFT JOIN p_item_tiers t ON t.item_id = i.item_id{only} GROUP BY 1, 2"
+                f"LEFT JOIN p_item_tiers t ON t.item_id = i.item_id{' WHERE ' + only if only else ''} GROUP BY 1, 2",
+                params,
             ).fetchall()
         return {(facet, ReviewStatus(status)): int(n) for facet, status, n in rows}
 

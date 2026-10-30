@@ -2569,6 +2569,12 @@ const handlers: Record<string, Handler> = {
     progress: [],
     stopping: false,
   }),
+  // The years the person's own conversation can look back to (时间切片) start at ``since``.
+  'GET /api/persona/life-story': () => ({
+    years: [],
+    undated: [],
+    since: 2019,
+  }),
   'GET /api/persona/handoffs': reply(away),
   'GET /api/persona/handoffs/count': reply({ pending: away.pending }),
   'GET /api/persona/transcripts/speakers': () => transcriptRoster,

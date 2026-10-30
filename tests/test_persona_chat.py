@@ -536,6 +536,31 @@ def test_retrieve_respects_as_of(store: PersonaStore, settings: Settings) -> Non
     assert any("对照组" in e.text for e, _ in full.expressions) and len(full.voice) == 2
 
 
+def test_reply_as_of_a_day_before_anything_is_known_says_so_without_asking_the_model(
+    store: PersonaStore, settings: Settings
+) -> None:
+    """时间切片 (P2.1): looking back to a year before any memory or word of the person, the twin says it has nothing of
+    them then; no model is asked to fill the years in, and nothing is logged as a question it failed."""
+    embedder = HashingEmbedder()
+    pc.index_persona(store, embedder, settings)
+    llm = FakeLLM(lambda *a: {"reply": "那时候我在读书。", "citations": [], "confidence": 0.9})
+    chat = pc.PersonaChat(store, llm, embedder, settings)
+    asked = [ChatTurn(role="user", content="你那时候在忙什么？")]
+    # Only where the person chose to look back so: elsewhere (the service, evaluation) the model is asked as before.
+    early = chat.reply(asked, as_of=D(2025, 12, 31), sliced=True)
+    assert early.abstain and early.mode == "abstain" and early.as_of == D(2025, 12, 31)
+    assert "2025 年" in early.reply and early.citations == [] and early.retrieved_ids == []
+
+    async def run() -> list[Any]:
+        return [r async for r in chat.stream_reply(asked, as_of=D(2025, 12, 31), sliced=True)]
+
+    assert asyncio.run(run()) == [early.reply, early]
+    assert llm.calls == [] and store.chat_demand() == {}
+    assert chat.reply(asked, as_of=D(2025, 12, 31)).reply == "那时候我在读书。"
+    # Once anything is known by then, it answers from that.
+    assert chat.reply(asked, as_of=D(2026, 9, 1), sliced=True).reply == "那时候我在读书。"
+
+
 def test_reply_filters_citations_and_caps_confidence(store: PersonaStore, settings: Settings) -> None:
     embedder = HashingEmbedder()
     pc.index_persona(store, embedder, settings)

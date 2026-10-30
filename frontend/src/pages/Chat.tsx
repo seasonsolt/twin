@@ -10,6 +10,7 @@ import {
   IconButton,
   ResizeHandle,
   Segmented,
+  Select,
   Text,
   TextLink,
   useConfirm,
@@ -26,6 +27,7 @@ import {
 import { useAllSessions } from '../features/chat/useAllSessions';
 import { useComposerLayout } from '../features/chat/useComposerLayout';
 import { useConversation } from '../features/chat/useConversation';
+import { lookBackYears, yearEnd } from '../features/chat/timeSlice';
 import { REFLECTIONS, type Reflection } from '../features/chat/types';
 import { usePlayback } from '../features/chat/usePlayback';
 import { useWork } from '../features/work/useWork';
@@ -78,7 +80,12 @@ export function Chat() {
   const work = useWork(workOn && active);
   // A question picked elsewhere (such as trying out a twin before saying it is all right) waits in the composer. One
   // brought with a way of talking (照镜子 from a memory whose two sides disagree) waits in a new conversation, in it.
-  const asked = state as { ask?: unknown; reflection?: unknown } | null;
+  // A year brought from the life line (和那年的自己聊) opens a new conversation looking back to it.
+  const asked = state as {
+    ask?: unknown;
+    reflection?: unknown;
+    asOfYear?: unknown;
+  } | null;
   const ask = asked?.ask;
   const askedReflection = REFLECTIONS.find(
     (r) => r.id === asked?.reflection,
@@ -128,6 +135,29 @@ export function Chat() {
     }
     setDraft(ask);
   }, [ask, askedReflection, key, clearChat, setDraft, setReflection]);
+  const askedYear = asked?.asOfYear;
+  const { setAsOf } = chat;
+  const sliced = useRef<string | null>(null);
+  useEffect(() => {
+    if (typeof askedYear !== 'number' || sliced.current === key) return;
+    sliced.current = key;
+    clearChat();
+    setAsOf(yearEnd(askedYear));
+  }, [askedYear, key, clearChat, setAsOf]);
+  // 时间切片: the years the person's own conversation can look back to, from the first one anything is known of.
+  const [since, setSince] = useState<number | null>(null);
+  useEffect(() => {
+    if (!active || !assistant) return;
+    const controller = new AbortController();
+    api<{ since?: number | null }>('/api/persona/life-story', {
+      signal: controller.signal,
+    })
+      .then((story) => setSince(story.since ?? null))
+      .catch(() => {
+        // Without it there is only the person as they are now.
+      });
+    return () => controller.abort();
+  }, [active, assistant, personaId]);
   const personaEdition = usePersonaEdition();
   // The persona edition's chat wears 素体: the twin's core over the conversation, its words in the voice face.
   const look = personaEdition ? 'sutai' : undefined;
@@ -538,6 +568,28 @@ export function Chat() {
       onChange={setReflection}
     />
   ) : undefined;
+  const year = chat.asOf ? Number(chat.asOf.slice(0, 4)) : null;
+  const years = lookBackYears(since, year, new Date().getFullYear());
+  const yearPick =
+    assistant && mode === 'chat' && years.length ? (
+      <Select
+        aria-label="和哪一年的自己聊"
+        value={year ?? ''}
+        disabled={chat.busy}
+        onChange={(event) =>
+          setAsOf(
+            event.target.value ? yearEnd(Number(event.target.value)) : null,
+          )
+        }
+      >
+        <option value="">现在的你</option>
+        {years.map((y) => (
+          <option key={y} value={y}>
+            {y} 年的你
+          </option>
+        ))}
+      </Select>
+    ) : undefined;
   const speakLast = () => {
     toggleReply(
       [...chat.turns].reverse().find((turn) => turn.reply?.reply.trim()),
@@ -671,7 +723,16 @@ export function Chat() {
               persona={persona}
               canManage={canManage}
               layout={composerLayout}
-              modeSwitch={modeSwitch}
+              modeSwitch={
+                yearPick ? (
+                  <>
+                    {modeSwitch}
+                    {yearPick}
+                  </>
+                ) : (
+                  modeSwitch
+                )
+              }
               target={picker}
               assistant={assistant}
               // Nobody else asks a twin of the persona edition, so there is no colleague's answer to try.

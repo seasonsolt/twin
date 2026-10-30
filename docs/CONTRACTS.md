@@ -169,6 +169,15 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
   `DELETE /api/persona/will/heirs/{heir_id}` → `{ok: true}`，口令哈希一并删掉，历史里仍留着给过他什么；
   `GET /api/persona/will/history` → `{changes: [{at, actor, action, heir_id, changes, heirs}]}`，从旧到新。`actor` 是本人的账号，没有账号时为 `self`。
   受众档过滤（P2.4）和界面（P2.3）还没做：现在遗嘱不影响任何回答。
+- **Time slice（P2.1）**：`ChatBody.as_of: date | None = None`（`YYYY-MM-DD`，网页选年份时取那年 12 月 31 日），
+  `POST /api/persona/chat`、`/chat/stream`（含附件）只在本人自己的对话（`assistant`：本人档、本人、不是试问）里用，
+  传给 `PersonaChat.reply` / `stream_reply` 的 `as_of`；别人的对话和试问忽略它，按现在答（回答的 `as_of` 为 null）。
+  回答照旧带 `as_of`。那天以前既没有条目（`item_as_of` 之后）也没有本人的原话时，`PersonaChat` 不检索、不调用模型、
+  不写 `p_chat_log`，回 `before_anything_reply(as_of)`（`abstain`，固定文字说那年和以前没有资料）；带附件的一轮照常答。
+  本人对话每次请求的 `as_of` 记在 `p_meta` 的 `conversation_as_of:{会话编号}`（只在变化时写；回到现在时删掉；
+  会话删除时一起删），不需要迁移。`GET /api/conversations/{id}` 在本人档的对话里多 `as_of`（没有就不给）。
+  `GET /api/persona/life-story` 多 `since`：任何条目最早一条带日期依据的年份（`persona.life_story.known_since`），
+  没有带日期的依据时为 null；网页的年份选择从这一年排到去年，生命线上这一年以后、今年以前有内容的年份有“和那年聊”。
 - **Diary and the mirror（P1.1）**：`SourceKind.DIARY`（日记）由 `parse_diary` 读入：日期开头、后面至多几个字的行
   是一天的标题（可带 Markdown `#`），之后每段落都是本人的、带这一天的日期；日期后面是一句话（超过 12 个字或带标点）时，
   这句是当天的第一段。第一天之前单独一行的短标题不算条目。`detect_kind` 在聊天、访谈之后、文档之前识别：
@@ -342,7 +351,8 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
   subjects, and existing profiles remain readable across the current kernel baseline.
 
 - Removed CLI chat `--as-of` and Web `ChatBody.as_of`; Web chat always uses current material. Eval and service
-  HTTP/MCP retain optional advanced `as_of`. Coverage date filtering is unchanged.
+  HTTP/MCP retain optional advanced `as_of`. Coverage date filtering is unchanged. (Both came back since: CLI
+  `twin chat --as-of`, and Web `ChatBody.as_of` for the person's own conversation, P2.1 time slice above.)
 - Removed archived biography eval payloads and their `decision/stance/voice/trap` type discriminator.
   Only the personal scenario and question input/expected/output contracts remain; old biography eval reports are
   no longer supported (this does not affect user databases).

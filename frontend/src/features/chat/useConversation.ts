@@ -30,6 +30,8 @@ interface Conversation {
   title: string;
   turns: Turn[];
   audience?: Audience;
+  /** The day the person's own conversation looks back to (时间切片), ``YYYY-MM-DD``. */
+  as_of?: string;
 }
 function stored(key: string) {
   try {
@@ -123,6 +125,8 @@ export function useConversation(active: boolean) {
   );
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [audience, setAudience] = useState<Audience | null>(null);
+  // The day the person's own conversation is answered as of (时间切片); null for the person as they are now.
+  const [asOf, setAsOf] = useState<string | null>(null);
   // What the conversation open is called, as it was read or renamed here: the list may not hold it (another page of
   // it, or another list than the conversation's own).
   const [conversationTitle, setConversationTitle] = useState<string | null>(
@@ -179,6 +183,7 @@ export function useConversation(active: boolean) {
     id.current = null;
     setConversationId(null);
     setAudience(null);
+    setAsOf(null);
     setConversationTitle(null);
     const cached = saved
       ? peekEssential<Conversation>(
@@ -212,6 +217,7 @@ export function useConversation(active: boolean) {
           if (!controller.signal.aborted) {
             selectId(conversation.id);
             setAudience(conversation.audience ?? null);
+            setAsOf(conversation.as_of ?? null);
             setConversationTitle(conversation.title ?? null);
             setTurns(conversation.turns);
             if (imported) markWritten();
@@ -221,6 +227,7 @@ export function useConversation(active: boolean) {
             if (error instanceof ApiError && error.status === 404) {
               selectId(null);
               setAudience(null);
+              setAsOf(null);
               setConversationTitle(null);
               setTurns([]);
             } else {
@@ -236,6 +243,7 @@ export function useConversation(active: boolean) {
       id.current = null;
       setConversationId(null);
       setAudience(null);
+      setAsOf(null);
       setConversationTitle(null);
       setTurns([]);
       setLoading(false);
@@ -343,6 +351,7 @@ export function useConversation(active: boolean) {
               .slice(-40)
               .map(({ role, content }) => ({ role, content })),
             ...(reflection !== 'ask' && { reflection }),
+            ...(asOf && { as_of: asOf }),
           };
       const response =
         attachments.length && !trial
@@ -452,6 +461,7 @@ export function useConversation(active: boolean) {
     request.current = null;
     selectId(null);
     setAudience(null);
+    setAsOf(null);
     setConversationTitle(null);
     setTurns([]);
     setDraft('');
@@ -482,6 +492,7 @@ export function useConversation(active: boolean) {
       if (controller.signal.aborted || !mounted.current) return false;
       selectId(conversation.id);
       setAudience(conversation.audience ?? null);
+      setAsOf(conversation.as_of ?? null);
       setConversationTitle(conversation.title ?? null);
       setTurns(conversation.turns);
       setRestoreFailed(false);
@@ -597,6 +608,8 @@ export function useConversation(active: boolean) {
     turns,
     conversationId,
     audience,
+    asOf,
+    setAsOf,
     conversationTitle,
     setNoteTier,
     rateReply,

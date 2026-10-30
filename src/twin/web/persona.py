@@ -84,6 +84,7 @@ from .conversations import (
     ConversationIndex,
     append_reply,
     append_user,
+    keep_as_of,
     owner,
     request_asker_name,
     request_audience,
@@ -162,6 +163,9 @@ class ChatBody(BaseModel):
     preview: bool = False
     # A way of talking with one's own assistant about oneself (``persona.reflection``); ignored anywhere else.
     reflection: Reflection = ""
+    # 时间切片: answer from what was known of the person on this day (a year chosen is its 31 December). Only in the
+    # person's own conversation, where it is remembered for the conversation; ignored anywhere else.
+    as_of: dt.date | None = None
 
 
 class TierBody(BaseModel):
@@ -259,10 +263,11 @@ def run_chat(
     handoffs: tuple[HandoffDesk, str] | None = None,
     assistant: bool = False,
     reflection: Reflection = "",
+    as_of: dt.date | None = None,
 ) -> dict[str, Any]:
     """``handoffs``: the desk and what the asker is called, to hand on what the reply leaves to the person.
     ``assistant``: the conversation is the person's own with their assistant (``persona.assistant``), and
-    ``reflection`` the way they are talking with it (``persona.reflection``)."""
+    ``reflection`` the way they are talking with it (``persona.reflection``); ``as_of`` the day it looks back to."""
     with PersonaStore(settings.db_path) as store:
         log("检索档案并作答")
         # The ledger is the person's own: only a conversation of the tier that may use everything has it.
@@ -287,7 +292,9 @@ def run_chat(
             if handoffs and handoffs[0].answers is not None
             else []
         )
-        reply = chat.reply(messages, owner_said=owner_said, team_answers=[prompt_line(c) for c in cards])
+        reply = chat.reply(
+            messages, as_of, owner_said=owner_said, team_answers=[prompt_line(c) for c in cards], sliced=assistant
+        )
         payload = chat_payload(store, reply, audience=audience)
         if cards:
             payload["team_answers"] = cards
@@ -1151,14 +1158,18 @@ def register(
         email = owner(request)
         audience = index.audience(body.conversation_id, request_audience(request))
         asker = (desk, request_asker_name(request))
+        assistant = audience == SELF and bool(request.scope.get("twin_person"))
+        as_of = body.as_of if assistant else None
         with open_store() as store:
+            if assistant:
+                keep_as_of(store, body.conversation_id, email, as_of)
             if in_crisis(messages[-1].content):
                 append_user(store, body.conversation_id, email, messages[-1].content, index)
                 payload = {**chat_payload(store, crisis_reply(), audience=audience), "crisis": True}
                 return JSONResponse(append_reply(store, body.conversation_id, email, payload, index), status_code=200)
             if not store.has_items():
                 append_user(store, body.conversation_id, email, messages[-1].content, index)
-                reply = no_profile_reply(store)
+                reply = no_profile_reply(store, as_of)
                 return JSONResponse(
                     append_reply(store, body.conversation_id, email, chat_payload(store, reply), index),
                     status_code=200,
@@ -1183,8 +1194,9 @@ def register(
                 audience,
                 index,
                 asker,
-                audience == SELF and bool(request.scope.get("twin_person")),
+                assistant,
                 body.reflection,
+                as_of,
             ),
             prepare=accept,
         )
@@ -1357,6 +1369,11 @@ def register(
             return crisis_response(messages[-1].content, body, email, audience)
         # The person's own conversation is answered by their assistant, which also takes down notes and promises.
         assistant = audience == SELF and bool(request.scope.get("twin_person")) and not preview
+        # 时间切片 is the person's own: anyone else's conversation, and a trial as a colleague, answer as of now.
+        as_of = body.as_of if assistant else None
+        if assistant:
+            with open_store() as store:
+                keep_as_of(store, body.conversation_id, email, as_of)
         if assistant and not attachment_passages and (note := note_text(messages[-1].content)) is not None:
             return note_response(note, messages[-1].content, body, email)
         if (
@@ -1409,7 +1426,7 @@ def register(
 
         def unbuilt() -> tuple[str, dict[str, Any]]:
             with open_store() as store:
-                reply = no_profile_reply(store)
+                reply = no_profile_reply(store, as_of)
                 if preview:
                     return reply.reply, chat_payload(store, reply, audience=COLLEAGUE)
                 return reply.reply, save(store, reply)
@@ -1454,11 +1471,13 @@ def register(
                     async with aclosing(
                         chat.stream_reply(
                             messages,
+                            as_of,
                             attachments=attachment_passages,
                             persist=not attachment_passages and not preview,
                             owner_said=[] if preview else owner_said,
                             team_answers=[prompt_line(c) for c in shown],
                             steps=True,
+                            sliced=assistant,
                         )
                     ) as replies:
                         async for result in replies:

@@ -27,6 +27,8 @@ export function conversationServer() {
       persona: string;
       /** The tier it answers from, where a test is about the person's own conversations. */
       audience?: 'self' | 'colleague';
+      /** The day the person's own conversation looks back to (时间切片). */
+      as_of?: string;
       /** Asked by the person's assistant in their name, or how many colleagues' twins it asked in this one. */
       via?: 'direct' | 'delegate';
       delegated?: number;

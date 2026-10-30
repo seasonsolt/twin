@@ -80,3 +80,10 @@ def story(items: list[PersonaItem], today: dt.date) -> tuple[list[Span], list[Pl
             spans.append(Span(year, until, []))
             year = until + 1
     return spans, [p for p in placed if p.year is None]
+
+
+def known_since(items: list[PersonaItem]) -> int | None:
+    """The first year the twin knows anything of the person as of (时间切片, P2.1): the earliest dated evidence of any
+    memory. A conversation looking back to an earlier year has nothing to answer from (``item_as_of``); None when no
+    evidence is dated."""
+    return min((e.date.year for i in items for e in i.evidence if e.date is not None), default=None)

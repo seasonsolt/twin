@@ -10,6 +10,7 @@ import {
   personas,
   status,
   weekly,
+  willRehearsal,
 } from './mockApi';
 
 // Each key page, on a desktop and a 375px phone (see playwright.config.ts). `ready` is text that only shows once
@@ -533,6 +534,55 @@ for (const { name, path, ready, viewport, setup } of pages) {
     expect(missing, 'requests without a mock in e2e/mockApi.ts').toEqual([]);
   });
 }
+
+test('rehearse an heir: answered as the will gives, what was left out named', async ({
+  page,
+}, info) => {
+  const missing: string[] = [];
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.clock.setFixedTime(NOW);
+  await mockApi(page, missing);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.route('**/api/whoami', (route) =>
+    route.fulfill({
+      json: {
+        email: null,
+        admin: true,
+        auth_enabled: false,
+        edition: 'persona',
+      },
+    }),
+  );
+  await page.route('**/api/persona/chat/stream', (route) => {
+    const sent = route.request().postDataJSON() as {
+      messages: { content: string }[];
+    };
+    return route.fulfill({
+      contentType: 'text/event-stream',
+      body: willRehearsal(sent.messages[sent.messages.length - 1].content),
+    });
+  });
+  await page.goto('/#/chat?will=');
+  const will = page.getByRole('dialog', { name: '数字遗嘱' });
+  await will.getByLabel('小雨的操作').click();
+  await will.getByRole('button', { name: '预演' }).click();
+  // A question answered from what the will gives her, then one about a topic it says not to talk about.
+  const panel = page.getByRole('dialog', { name: '预演 · 小雨' });
+  const input = panel.getByLabel('以小雨的身份问');
+  await input.fill('爸，你周末一般做什么？');
+  await input.press('Enter');
+  await expect(panel.getByLabel('没给小雨的')).toContainText('底线与原则');
+  await input.fill('你和妈妈那段婚姻呢？');
+  await input.press('Enter');
+  await expect(panel.getByText(/不和你谈/)).toBeVisible();
+  await page.evaluate(() => document.fonts.ready);
+  await expect(page).toHaveScreenshot(
+    `will-rehearsal-${info.project.name}.png`,
+  );
+  expect(errors, 'page errors').toEqual([]);
+  expect(missing, 'requests without a mock in e2e/mockApi.ts').toEqual([]);
+});
 
 test('name an heir: the aspects they may use', async ({ page }, info) => {
   const missing: string[] = [];

@@ -64,6 +64,20 @@ Positioning: Identity → Memory upload → Service. Repository, project, Python
   （按给他的条目算，不带提问需求）；`GET /api/persona/life-story`（同上，本人以外只有继承人能读）；`/api/conversations` 的列表、新建、读、改名、删除。
   页面和静态资源不受影响。
 
+## 预演（P2.6）
+
+- **接口**：沿用试问。`POST /api/persona/chat/stream` 体带 `preview: true` 和 `heir: "<heir_id>"`（最多 100 字），按继承人档
+  `heir:<heir_id>` 答：和这位继承人真去问时同一个检索、同一份遗嘱过滤、同一个不谈话题的拦截和危机护栏（`tests/test_will_preview.py`
+  核对两边给模型看的内容和引用一致）。和同事试问不同，`messages` 是页面送来的整段预演（最多 40 条），不谈话题的追问照样拦下。
+  只带 `heir` 不带 `preview` 400；非流式 `/api/persona/chat` 带 `preview` 照旧 400。
+- **谁能用**：只有本人（`web.handoffs.person`，和遗嘱接口一样；继承人、同事、访客 403）。遗嘱里没有这个编号（删掉了或不对）404
+  `找不到这位继承人，请刷新后重试`。记忆冻结后 423 `memory_sealed`：规格写的是“本人在世时”，冻结后遗嘱不能再改，预演也就没有用处；
+  在路由里拒绝（`lifecycle.refuse_if_sealed`），因为 `SealedMiddleware` 放过对话路径。拒绝都在调用模型之前。
+- **不留痕**：`persist=False`，不存会话、不写 `p_chat_log`、不生成转交、不改遗嘱、不冻结；没有账本、没有本人助手、`reach` 为 `none`、
+  不显示团队答案，`as_of` 不生效。
+- **没给他的**：`final` 多 `preview.withheld`（和同事试问同一格式：`id`、`facet`、`text` 前 60 字，最多 3 条）：同一问题在本人档的检索里
+  找到、这位继承人按遗嘱拿不到的条目（`heirs.usable_items`，含按词面命中不谈话题的）。检索跑不了时为空。危机护栏的回复没有 `preview`。
+
 ## Identity 与用户建档
 
 - `identity`（代码层 1）是无 I/O 的冻结契约：`name: str`、`aliases: list[str]`、

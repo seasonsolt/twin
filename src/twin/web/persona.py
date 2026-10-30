@@ -31,7 +31,7 @@ from ..delegations import Asked, Unclear
 from ..embed import Embedder, EmbedError
 from ..handoffs import HandoffDesk
 from ..llm import LLM, Effort
-from ..persona import gate, heirs, lifecycle
+from ..persona import gate, heirs, lifecycle, will
 from ..persona.assistant import note_text
 from ..persona.attachments import (
     MAX_CHAT_ATTACHMENT_BYTES,
@@ -75,7 +75,7 @@ from ..persona.schema import SOURCE_KIND_LABELS, ChatReply, ChatTurn, ReviewStat
 from ..persona.sources import MEMORY_KIND_LABELS, expression_view, parse_note, parse_upload
 from ..persona.store import PersonaStore, stored_identity
 from ..persona.text import extract_text
-from ..persona.tiers import COLLEAGUE, SELF, Audience, PrivateWords, Tier, is_heir, item_tier
+from ..persona.tiers import COLLEAGUE, SELF, Audience, PrivateWords, Tier, heir_audience, is_heir, item_tier
 from ..teamanswers import prompt_line, question_of
 from ..usage import CallRow, collect_calls, model_tokens, rate_limited, transient_summary
 from . import assistant as assistant_routes
@@ -91,6 +91,7 @@ from .conversations import (
     request_asker_name,
     request_audience,
 )
+from .handoffs import person
 from .jobs import AdmittedStream, Job, JobConflict, JobManager, PersonaProcessing, Ticket
 
 if TYPE_CHECKING:
@@ -163,6 +164,9 @@ class ChatBody(BaseModel):
     # 看同事会得到什么: answer the last message as a colleague would be answered, and keep nothing of it. Only the
     # person themself can ask for it.
     preview: bool = False
+    # 预演 (P2.6): with ``preview``, answer as the will answers this heir of it (``heir:<id>``), the whole rehearsal
+    # sent by the page each time, and keep nothing. Only the person themself, while the memory is not sealed.
+    heir: str | None = Field(default=None, max_length=100)
     # A way of talking with one's own assistant about oneself (``persona.reflection``); ignored anywhere else.
     reflection: Reflection = ""
     # 时间切片: answer from what was known of the person on this day (a year chosen is its 31 December). Only in the
@@ -1440,6 +1444,19 @@ def register(
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    def rehearsed_heir(request: Request, heir_id: str) -> Audience:
+        """The audience of 预演 (P2.6) as ``heir_id``: only the person may rehearse an heir's conversation, only while
+        they are alive (a sealed will can no longer be changed for what the rehearsal shows; 423), and only of an heir
+        the will names (404)."""
+        person(request)
+        with open_store() as store:
+            lifecycle.refuse_if_sealed(store)
+            try:
+                will.get(store, heir_id)
+            except KeyError:
+                raise HTTPException(404, "找不到这位继承人，请刷新后重试") from None
+        return heir_audience(heir_id)
+
     def stream_chat_response(
         body: ChatBody, request: Request, attachment_passages: Sequence[AttachmentPassage] = ()
     ) -> StreamingResponse:
@@ -1451,7 +1468,12 @@ def register(
         asker_name = request_asker_name(request)
         ledger = audience == SELF and not request.scope.get("twin_visitor")
         preview = body.preview
-        if preview:
+        if body.heir is not None and not preview:
+            raise HTTPException(400, "预演要带 preview")
+        if preview and body.heir is not None:
+            # 预演: the rehearsal as this heir would have it, answered from what the will gives them; nothing saved.
+            audience, ledger = rehearsed_heir(request, body.heir), False
+        elif preview:
             # 看同事会得到什么: the last message alone, answered from the colleague tier, with nothing saved.
             person_only(request)
             audience, ledger, messages = COLLEAGUE, False, messages[-1:]
@@ -1505,7 +1527,8 @@ def register(
             if assistant and body.reflection:
                 payload["reflection"] = body.reflection
             if preview:
-                payload["preview"] = {"withheld": trial_withheld(store, llm, embedder, settings, messages[-1].content)}
+                withheld = trial_withheld(store, llm, embedder, settings, messages[-1].content, audience)
+                payload["preview"] = {"withheld": withheld}
                 return payload
             return append_reply(
                 store,
@@ -1521,7 +1544,7 @@ def register(
             with open_store() as store:
                 reply = no_profile_reply(store, as_of)
                 if preview:
-                    return reply.reply, chat_payload(store, reply, audience=COLLEAGUE)
+                    return reply.reply, chat_payload(store, reply, audience=audience)
                 return reply.reply, save(store, reply)
 
         # The store is opened, read and written off the event loop, which other requests share.

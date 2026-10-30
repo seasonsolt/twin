@@ -105,6 +105,7 @@ beforeEach(() => {
           ],
         });
       if (url === '/api/persona/coverage') return json(coverage);
+      if (url === '/api/persona/chat/stream') return rehearsal();
       if (url === '/api/persona/will/heirs' && method === 'POST') {
         const body = JSON.parse(String(init.body)) as Partial<Heir>;
         const added = heir({ ...body, heir_id: 'heir_2' });
@@ -126,6 +127,26 @@ beforeEach(() => {
     }),
   );
 });
+
+/** A rehearsed answer as the server streams it: drawn on what the will gives, with what it left out. */
+const rehearsal = () =>
+  new Response(
+    [
+      'event: delta\ndata: {"text":"我们常去河边钓鱼。"}\n\n',
+      `event: final\ndata: ${JSON.stringify({
+        reply: '我们常去河边钓鱼。',
+        citations: [],
+        confidence: 0.9,
+        abstain: false,
+        preview: {
+          withheld: [
+            { id: 'pi_rule', facet: '底线与原则', text: '他做事不欠人情' },
+          ],
+        },
+      })}\n\n`,
+    ].join(''),
+    { headers: { 'Content-Type': 'text/event-stream' } },
+  );
 
 afterEach(() => {
   useAuth.setState({ identity: null });
@@ -399,6 +420,7 @@ it('keeps the will as it is once the memory is sealed', async () => {
   ).toBeDisabled();
   await user.click(within(dialog).getByLabelText('小雨的操作'));
   expect(within(dialog).getByRole('button', { name: '修改' })).toBeDisabled();
+  expect(within(dialog).getByRole('button', { name: '预演' })).toBeDisabled();
   expect(within(dialog).getByRole('button', { name: '删除' })).toBeDisabled();
   expect(
     within(dialog).getByRole('list', { name: '继承人' }),
@@ -419,4 +441,72 @@ it('knows the will is sealed from a server that says so, before anything is trie
   expect(
     within(dialog).getByRole('button', { name: '加继承人' }),
   ).toBeDisabled();
+});
+
+it("rehearses an heir's conversation as the heir, naming what each answer left out and keeping nothing", async () => {
+  const user = userEvent.setup();
+  const dialog = await openWill();
+  await user.click(within(dialog).getByLabelText('小雨的操作'));
+  expect(
+    within(dialog)
+      .getAllByRole('button')
+      .map((button) => button.textContent)
+      .filter((label) => ['修改', '预演', '删除'].includes(label ?? '')),
+  ).toEqual(['修改', '预演', '删除']);
+  await user.click(within(dialog).getByRole('button', { name: '预演' }));
+  const panel = await screen.findByRole('dialog', { name: '预演 · 小雨' });
+  expect(within(panel).getByText(/以小雨的身份问几个问题/)).toBeVisible();
+  const input = within(panel).getByLabelText('以小雨的身份问');
+  await user.type(input, '小时候我们常做什么？{Enter}');
+  const answer = await within(panel).findByRole('article', {
+    name: '分身回复',
+  });
+  expect(answer).toHaveTextContent('我们常去河边钓鱼。');
+  const left = within(answer).getByLabelText('没给小雨的');
+  expect(left).toHaveTextContent('未用 · 底线与原则');
+  expect(within(left).getByTitle('他做事不欠人情')).toBeVisible();
+  // The next question carries the rehearsal so far, as the heir's would; each asks as this heir, keeping nothing.
+  await user.type(input, '那工作呢？');
+  await user.click(within(panel).getByRole('button', { name: '发送' }));
+  await waitFor(() =>
+    expect(
+      within(panel).getAllByRole('article', { name: '分身回复' }),
+    ).toHaveLength(2),
+  );
+  expect(sent.map(({ method, url }) => `${method} ${url}`)).toEqual([
+    'POST /api/persona/chat/stream',
+    'POST /api/persona/chat/stream',
+  ]);
+  expect(sent[0].body).toEqual({
+    messages: [{ role: 'user', content: '小时候我们常做什么？' }],
+    preview: true,
+    heir: 'heir_1',
+  });
+  expect(sent[1].body).toEqual({
+    messages: [
+      { role: 'user', content: '小时候我们常做什么？' },
+      { role: 'twin', content: '我们常去河边钓鱼。' },
+      { role: 'user', content: '那工作呢？' },
+    ],
+    preview: true,
+    heir: 'heir_1',
+  });
+  // Straight on to changing the will for this heir.
+  await user.click(within(panel).getByRole('button', { name: '改遗嘱' }));
+  expect(await screen.findByRole('dialog', { name: '小雨' })).toBeVisible();
+});
+
+it('goes back to the will when a rehearsal is refused because the memory is sealed', async () => {
+  sealed = true;
+  const user = userEvent.setup();
+  const dialog = await openWill();
+  await user.click(within(dialog).getByLabelText('小雨的操作'));
+  await user.click(within(dialog).getByRole('button', { name: '预演' }));
+  const panel = await screen.findByRole('dialog', { name: '预演 · 小雨' });
+  await user.type(
+    within(panel).getByLabelText('以小雨的身份问'),
+    '在吗{Enter}',
+  );
+  const will = await screen.findByRole('dialog', { name: '数字遗嘱' });
+  expect(await within(will).findByText('已冻结，遗嘱不能再改')).toBeVisible();
 });

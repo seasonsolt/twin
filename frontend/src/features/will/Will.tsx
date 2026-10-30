@@ -20,6 +20,7 @@ import { useSeesWhole } from '../../stores/access';
 import { usePersonaEdition } from '../../stores/auth';
 import { usePersonas } from '../../stores/personas';
 import { HeirEditor } from './HeirEditor';
+import { HeirPreview } from './HeirPreview';
 import {
   aspectCount,
   type Heir,
@@ -123,11 +124,13 @@ function HeirRow({
   heir,
   sealed,
   onEdit,
+  onRehearse,
   onRemove,
 }: {
   heir: Heir;
   sealed: boolean;
   onEdit: () => void;
+  onRehearse: () => void;
   onRemove: () => void;
 }) {
   const count = aspectCount(heir);
@@ -149,6 +152,7 @@ function HeirRow({
           label={`${heir.name}的操作`}
           items={[
             { label: '修改', onSelect: onEdit, disabled: sealed },
+            { label: '预演', onSelect: onRehearse, disabled: sealed },
             {
               label: '删除',
               onSelect: onRemove,
@@ -165,7 +169,7 @@ function HeirRow({
 /**
  * 数字遗嘱 (P2.3): who may talk with the twin after the person, about what and until when, kept by the person alone
  * in a side layer over whatever page they were on. Each heir is a row; naming or changing one is done a step at a
- * time in the same layer. Once the memory is sealed the will stays as it was left and nothing here can change it.
+ * time in the same layer, and so is rehearsing what the heir would be answered (预演). Once the memory is sealed the will stays as it was left and nothing here can change it.
  */
 export function Will() {
   const keeps = useKeepsWill();
@@ -178,6 +182,8 @@ export function Will() {
   const [sealed, setSealed] = useState(false);
   // The heir being named (null) or changed; undefined while the list shows.
   const [editing, setEditing] = useState<Heir | null | undefined>(undefined);
+  // The heir whose conversation the person is rehearsing (预演), if any.
+  const [rehearsing, setRehearsing] = useState<Heir | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [taxonomy, setTaxonomy] = useState<Taxonomy | null>(null);
@@ -209,6 +215,7 @@ export function Will() {
     setWill(null);
     setError('');
     setEditing(undefined);
+    setRehearsing(null);
     void load();
     return () => loading.current?.abort();
   }, [open, load]);
@@ -246,6 +253,16 @@ export function Will() {
     if (!sealedRefusal(failure)) return false;
     setSealed(true);
     setEditing(undefined);
+    setRehearsing(null);
+    return true;
+  };
+
+  // A rehearsal refused: sealed meanwhile, or the heir taken out elsewhere; back to the will as it now stands.
+  const rehearsalRefused = (failure: unknown) => {
+    if (refused(failure)) return true;
+    if (!(failure instanceof ApiError) || failure.status !== 404) return false;
+    setRehearsing(null);
+    void load();
     return true;
   };
 
@@ -288,6 +305,7 @@ export function Will() {
 
   const edit = (heir: Heir | null) => {
     setSaveError('');
+    setRehearsing(null);
     setEditing(heir);
   };
 
@@ -295,7 +313,13 @@ export function Will() {
     <Dialog
       open={open}
       onOpenChange={(next) => !next && close()}
-      title={editing === undefined ? '数字遗嘱' : (editing?.name ?? '加继承人')}
+      title={
+        editing !== undefined
+          ? (editing?.name ?? '加继承人')
+          : rehearsing
+            ? `预演 · ${rehearsing.name}`
+            : '数字遗嘱'
+      }
       variant="side"
     >
       {editing !== undefined ? (
@@ -308,6 +332,14 @@ export function Will() {
           error={saveError}
           onSave={(body) => void save(body)}
           onCancel={() => setEditing(undefined)}
+        />
+      ) : rehearsing ? (
+        <HeirPreview
+          key={rehearsing.heir_id}
+          heir={rehearsing}
+          onEdit={() => edit(rehearsing)}
+          onBack={() => setRehearsing(null)}
+          onRefused={rehearsalRefused}
         />
       ) : (
         <Stack gap={4}>
@@ -334,6 +366,10 @@ export function Will() {
                       heir={heir}
                       sealed={sealed}
                       onEdit={() => edit(heir)}
+                      onRehearse={() => {
+                        setError('');
+                        setRehearsing(heir);
+                      }}
                       onRemove={() => void remove(heir)}
                     />
                   ))}

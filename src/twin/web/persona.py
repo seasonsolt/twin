@@ -8,6 +8,7 @@ import datetime as dt
 import json
 import logging
 import math
+import re
 import time
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterator, Sequence
 from contextlib import aclosing, asynccontextmanager, contextmanager, suppress
@@ -30,7 +31,7 @@ from ..delegations import Asked, Unclear
 from ..embed import Embedder, EmbedError
 from ..handoffs import HandoffDesk
 from ..llm import LLM, Effort
-from ..persona import gate, lifecycle
+from ..persona import gate, heirs, lifecycle
 from ..persona.assistant import note_text
 from ..persona.attachments import (
     MAX_CHAT_ATTACHMENT_BYTES,
@@ -74,13 +75,14 @@ from ..persona.schema import SOURCE_KIND_LABELS, ChatReply, ChatTurn, ReviewStat
 from ..persona.sources import MEMORY_KIND_LABELS, expression_view, parse_note, parse_upload
 from ..persona.store import PersonaStore, stored_identity
 from ..persona.text import extract_text
-from ..persona.tiers import COLLEAGUE, SELF, Audience, PrivateWords, Tier, for_audience, item_tier, private_words
+from ..persona.tiers import COLLEAGUE, SELF, Audience, PrivateWords, Tier, is_heir, item_tier
 from ..teamanswers import prompt_line, question_of
 from ..usage import CallRow, collect_calls, model_tokens, rate_limited, transient_summary
 from . import assistant as assistant_routes
 from .assistant import keep_note, note_reply, person_only, trial_withheld
 from .backends import Backends, BackendUnavailable
 from .conversations import (
+    HEIR_SCOPE,
     ConversationIndex,
     append_reply,
     append_user,
@@ -174,9 +176,9 @@ class TierBody(BaseModel):
 
 def visible_item(store: PersonaStore, item_id: str, audience: Audience) -> None:
     """404 unless the item exists and ``audience`` may see it: an item of the person's own tier does not show that it
-    exists to anyone else."""
+    exists to anyone else, nor one the will does not give to an heir."""
     item = store.get_item(item_id)
-    if item is None or (audience != SELF and item_tier(item, store.item_tiers()) != COLLEAGUE):
+    if item is None or (audience != SELF and not heirs.usable_items(store, [item], audience)):
         raise HTTPException(404, f"找不到档案条目 {item_id}（可能已在重新构建时合并）")
 
 
@@ -313,7 +315,7 @@ def for_citation(store: PersonaStore, items: dict[str, PersonaItem], audience: A
     """The cited items a conversation of ``audience`` may be shown."""
     if audience == SELF or not items:
         return items
-    allowed = {i.item_id for i in for_audience(items.values(), store.item_tiers(), audience)}
+    allowed = {i.item_id for i in heirs.usable_items(store, items.values(), audience)}
     return {item_id: item for item_id, item in items.items() if item_id in allowed}
 
 
@@ -346,9 +348,7 @@ def cited_view(
             cited.append({"id": ref, "kind": "item", "facet": facet, "text": item.statement})
         elif (e := store.get_expression(ref)) is not None:
             if hidden is None:  # read once, and only when an answer cites someone's words
-                hidden = private_words(
-                    store.list_items(include_rejected=True), store.item_tiers(), store.private_note_sources()
-                )
+                hidden = heirs.hidden_words(store, audience)
             if ref in hidden:
                 continue
             day = e.date.isoformat() if e.date else None
@@ -513,6 +513,60 @@ class SealedMiddleware:
             and await run_in_threadpool(lifecycle.sealed_path, self.db_path)
         ):
             await sealed_response()(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
+
+
+# What an heir's request may reach (P2.4): talking with the twin and reading, through the heir's tier, what the will
+# gives them; their own conversations. Everything else is refused, whatever it is, so a route added later is refused
+# too until it is put here, with its reads filtered for an heir (the list is checked in ``tests/test_heirs.py``).
+# What only the person may see or do (剖析观察、照镜子、自评、人生回顾、补一补, the will, the ledger, settings) is
+# never here. Paths are matched whole; ``{}`` is one segment.
+HEIR_ALLOWED: tuple[tuple[str, str], ...] = (
+    ("POST", "/api/persona/chat"),
+    ("POST", "/api/persona/chat/stream"),
+    ("GET", "/api/persona/items"),
+    ("GET", "/api/persona/items/search"),
+    ("GET", "/api/persona/items/summary"),
+    ("GET", "/api/persona/sources/{}/text"),
+    ("GET", "/api/persona/coverage"),
+    ("GET", "/api/persona/life-story"),
+    ("GET", "/api/conversations"),
+    ("POST", "/api/conversations"),
+    ("GET", "/api/conversations/{}"),
+    ("PATCH", "/api/conversations/{}"),
+    ("DELETE", "/api/conversations/{}"),
+)
+_HEIR_ALLOWED = [
+    (method, re.compile("^" + re.escape(path).replace(re.escape("{}"), "[^/]+") + "$")) for method, path in HEIR_ALLOWED
+]
+
+
+def heir_allowed(method: str, path: str) -> bool:
+    """Whether an heir's request of ``method`` to ``path`` may go on: every page and asset, and of the API only
+    ``HEIR_ALLOWED``."""
+    if not path.startswith("/api/"):
+        return True
+    return any(method == m and pattern.match(path) for m, pattern in _HEIR_ALLOWED)
+
+
+class HeirMiddleware:
+    """Refuse an heir's request (``conversations.HEIR_SCOPE``) to anything but ``HEIR_ALLOWED``, with 403
+    ``heir_forbidden``. It sits right inside sign-in, before the twin's routes and the app's own (the library, the
+    settings), so nothing else an heir could reach reads the person's memory unfiltered."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if (
+            scope["type"] == "http"
+            and scope.get(HEIR_SCOPE)
+            and not heir_allowed(str(scope.get("method", "")), str(scope.get("path", "")))
+        ):
+            await JSONResponse({"detail": "这里只有本人能看", "code": "heir_forbidden"}, status_code=403)(
+                scope, receive, send
+            )
             return
         await self.app(scope, receive, send)
 
@@ -828,13 +882,24 @@ def register(
 
     @app.get("/api/persona/sources/{source_id}/text", response_class=PlainTextResponse)
     def source_text(source_id: str, request: Request) -> str:
+        audience = request_audience(request)
         with open_store() as store:
             source = store.get_source(source_id)
             # A note the person kept to themself is not for those who manage the twin either.
-            if source is None or (request_audience(request) != SELF and source_id in store.private_note_sources()):
+            if source is None or (audience == COLLEAGUE and source_id in store.private_note_sources()):
                 raise HTTPException(404, "找不到这条记忆")
             # The person's own text as written, dreams included and marked: the twin does not read them.
             expressions = expression_view(store, settings, source_id=source_id, mirror=True)
+            if is_heir(audience):
+                # An heir reads only the words the will gives them, none about a topic not to be talked about; a
+                # memory with none of them does not show that it exists.
+                hidden = heirs.hidden_words(store, audience)
+                avoid = given.avoid if (given := heirs.grant(store, audience)) is not None else ()
+                expressions = [
+                    e for e in expressions if e.expression_id not in hidden and not heirs.mentions(e.text, avoid)
+                ]
+                if not expressions:
+                    raise HTTPException(404, "找不到这条记忆")
             speaker_lines = source.kind in {SourceKind.CHAT, SourceKind.INTERVIEW, SourceKind.AUDIO, SourceKind.VIDEO}
             return "\n\n".join(
                 (f"{e.context}\n" if e.context and not source.media_sha else "")
@@ -987,9 +1052,13 @@ def register(
     def hidden_words(store: PersonaStore, request: Request) -> PrivateWords:
         """The words the viewer may not be shown in an item's evidence: the notes the person kept to themself, for a
         viewer of the colleague tier (an item opened to colleagues may still quote one), none for the person. An item
-        a colleague can see is of their tier, so no other words of it are private."""
-        if request_audience(request) == SELF:
+        a colleague can see is of their tier, so no other words of it are private. An heir is shown only the words the
+        will gives them (``heirs.hidden_words``)."""
+        audience = request_audience(request)
+        if audience == SELF:
             return PrivateWords()
+        if is_heir(audience):
+            return heirs.hidden_words(store, audience)
         return PrivateWords(sources=frozenset(store.private_note_sources()))
 
     def item_view(i: PersonaItem, tiers: dict[str, Tier], hidden: PrivateWords) -> dict[str, Any]:
@@ -1027,7 +1096,12 @@ def register(
         if unknown := [d for d in dimension or () if d not in DIMENSION_BY_ID]:
             raise HTTPException(400, f"未知的维度 {unknown[0]}")
         facet_ids = [f.facet_id for f in FACETS if f.dimension_id in set(dimension)] if dimension else None
+        audience = request_audience(request)
         with open_store() as store:
+            given = heirs.grant(store, audience)
+            # An heir's page leaves out the items about a topic not to be talked about, which SQL cannot tell: all the
+            # items the will gives are read, then paged (a person's items are a few thousand at most).
+            whole = given is not None and bool(given.avoid)
             items, total = store.query_items(
                 facet_ids=facet_ids,
                 review=review,
@@ -1036,10 +1110,14 @@ def register(
                 conflict=conflict,
                 by_evidence=sort == "evidence",
                 include_rejected=include_rejected,
-                limit=limit,
-                offset=offset,
-                audience=request_audience(request),
+                limit=None if whole else limit,
+                offset=0 if whole else offset,
+                audience=audience,
+                grant=given,
             )
+            if whole and given is not None:
+                items = [i for i in items if not heirs.mentions(heirs.item_words(i), given.avoid)]
+                total, items = len(items), items[offset : offset + limit]
             tiers = store.item_tiers()
             hidden = hidden_words(store, request)
             views = [item_view(i, tiers, hidden) for i in items]
@@ -1081,8 +1159,17 @@ def register(
         disagrees (worth a look, never a queue to work through)."""
         with open_store() as store:
             audience = request_audience(request)
-            counts = store.item_counts(audience)
-            _, conflicts = store.query_items(conflict=True, limit=0, audience=audience)
+            if is_heir(audience):
+                # Counted from the items themselves, without those about a topic not to be talked about.
+                usable = heirs.usable_items(store, store.list_items(), audience)
+                per_facet: dict[str, int] = {}
+                for i in usable:
+                    per_facet[i.facet_id] = per_facet.get(i.facet_id, 0) + 1
+                counts = {(f, ReviewStatus.UNREVIEWED): n for f, n in per_facet.items()}
+                conflicts = sum(1 for i in usable if i.conflict)
+            else:
+                counts = store.item_counts(audience)
+                _, conflicts = store.query_items(conflict=True, limit=0, audience=audience)
         totals: dict[str, int] = {}
         for (facet_id, status), n in counts.items():
             if status is ReviewStatus.REJECTED or facet_id not in FACET_BY_ID:
@@ -1136,10 +1223,13 @@ def register(
     @app.get("/api/persona/coverage")
     def get_coverage(request: Request, as_of: str | None = None) -> dict[str, Any]:
         """What the twin knows per facet, of the memories the viewer may see: the person sees all of it, anyone else
-        only the colleague tier, which can be less."""
+        only the colleague tier, which can be less, and an heir what the will gives them, without what was asked of
+        the twin (the questions are the person's and their colleagues')."""
+        audience = request_audience(request)
         with open_store() as store:
-            items = for_audience(store.list_items(), store.item_tiers(), request_audience(request))
-            report = coverage_report(items, consented_facets(store), _date(as_of, "as_of"), demand=store.chat_demand())
+            items = heirs.usable_items(store, store.list_items(), audience)
+            demand = None if is_heir(audience) else store.chat_demand()
+            report = coverage_report(items, consented_facets(store), _date(as_of, "as_of"), demand=demand)
         data = report.model_dump(mode="json")
         data["level_labels"] = LEVEL_LABELS
         data["checked_label"] = CHECKED_LABEL
@@ -1157,7 +1247,8 @@ def register(
         messages = validate_chat(body)
         email = owner(request)
         audience = index.audience(body.conversation_id, request_audience(request))
-        asker = (desk, request_asker_name(request))
+        # An heir's conversation hands nothing to the person and is shown none of the team's answers.
+        asker = None if is_heir(audience) else (desk, request_asker_name(request))
         assistant = audience == SELF and bool(request.scope.get("twin_person"))
         as_of = body.as_of if assistant else None
         with open_store() as store:
@@ -1369,6 +1460,8 @@ def register(
             return crisis_response(messages[-1].content, body, email, audience)
         # The person's own conversation is answered by their assistant, which also takes down notes and promises.
         assistant = audience == SELF and bool(request.scope.get("twin_person")) and not preview
+        # An heir's conversation hands nothing to the person and is shown none of the team's answers.
+        heir = is_heir(audience)
         # 时间切片 is the person's own: anyone else's conversation, and a trial as a colleague, answer as of now.
         as_of = body.as_of if assistant else None
         if assistant:
@@ -1420,7 +1513,7 @@ def register(
                 email,
                 payload,
                 index,
-                (desk, asker_name, audience),
+                None if heir else (desk, asker_name, audience),
                 assistant=assistant,
             )
 
@@ -1440,7 +1533,7 @@ def register(
                 return
             # Waits, with heartbeats, for one of the chat worker slots that chat jobs use too.
             async with ticket.running():
-                if desk.answers is not None:
+                if desk.answers is not None and not heir:
                     asked = question_of([m.content for m in messages if m.role == "user"])
                     shown.extend(
                         await off_loop(
@@ -1458,10 +1551,10 @@ def register(
                             settings,
                             ledger=ledger,
                             audience=audience,
-                            reach=desk.reach(None if preview else email),
+                            reach="none" if heir else desk.reach(None if preview else email),
                             assistant=assistant,
-                            # 看同事会得到什么 is asked by nobody in particular.
-                            asker=None if preview else chat_asker(desk, email, asker_name),
+                            # 看同事会得到什么 is asked by nobody in particular, nor is anyone known to an heir's.
+                            asker=None if preview or heir else chat_asker(desk, email, asker_name),
                             reflection=body.reflection,
                         )
                     )

@@ -9,11 +9,13 @@ import {
   MessageCircle,
   MessageCircleQuestion,
   Mic,
+  ScrollText,
   Settings2,
   Users,
 } from 'lucide-react';
 import { failing, useSystem } from '../../stores/system';
 import { rebuildHeld, useOpenSettings } from '../../features/settings/Settings';
+import { useKeepsWill, useOpenWill } from '../../features/will/Will';
 import {
   AccountMenu,
   NavPill,
@@ -327,6 +329,9 @@ export function SidebarAccount() {
     self?.can_manage === false || persona ? undefined : self?.id,
   );
   const openSettings = useOpenSettings();
+  // 数字遗嘱: only the person keeps one, in the persona edition.
+  const keepsWill = useKeepsWill();
+  const openWill = useOpenWill();
   const down = useSystem((state) => failing(state.data).length);
   const held = useSystem((state) => rebuildHeld(state.data));
   const { theme, setTheme, options } = useThemes();
@@ -359,6 +364,16 @@ export function SidebarAccount() {
               ]
             : [],
           [
+            ...(keepsWill
+              ? [
+                  {
+                    key: 'will',
+                    label: '数字遗嘱',
+                    icon: ScrollText,
+                    onSelect: () => openWill(),
+                  },
+                ]
+              : []),
             {
               key: 'settings',
               label: '设置',

@@ -1355,6 +1355,33 @@ const facetLevels: [string, string, number][] = [
 // Facets at the third level whose answers held up when the twin was asked about them.
 const checkedFacets = new Set(['2.1', '5.1']);
 
+const willHeir = (heir_id: string, name: string, relation: string) => ({
+  heir_id,
+  name,
+  relation,
+  aspects: [] as string[],
+  facets: [] as string[],
+  avoid: [] as string[],
+  voice: false,
+  likeness: false,
+  retire_on: null as string | null,
+  farewell: null as string | null,
+  created_at: '2026-10-12T21:05:00',
+  updated_at: '2026-10-16T20:12:00',
+});
+
+export const willHeirs = [
+  {
+    ...willHeir('heir_yu', '小雨', '女儿'),
+    aspects: ['D1', 'D2', 'D9'],
+    facets: ['3.1'],
+    avoid: ['前一段婚姻'],
+    voice: true,
+    retire_on: '2066-06-01',
+  },
+  willHeir('heir_zhou', '老周', '老友'),
+];
+
 const coverage = {
   taxonomy: 't3',
   as_of: '2026-10-17',
@@ -2574,6 +2601,36 @@ const handlers: Record<string, Handler> = {
     years: [],
     undated: [],
     since: 2019,
+  }),
+  // 数字遗嘱: two heirs, one given whole aspects and a facet until a day, one given nothing yet.
+  'GET /api/persona/will': () => ({ heirs: willHeirs }),
+  'GET /api/persona/will/history': () => ({
+    changes: [
+      {
+        at: '2026-10-12T21:05:00',
+        actor: 'self',
+        action: 'add',
+        heir_id: 'heir_yu',
+        changes: [],
+        heirs: willHeirs.slice(0, 1),
+      },
+      {
+        at: '2026-10-15T09:30:00',
+        actor: 'self',
+        action: 'add',
+        heir_id: 'heir_zhou',
+        changes: [],
+        heirs: willHeirs,
+      },
+      {
+        at: '2026-10-16T20:12:00',
+        actor: 'self',
+        action: 'update',
+        heir_id: 'heir_yu',
+        changes: ['aspects', 'retire_on'],
+        heirs: willHeirs,
+      },
+    ],
   }),
   'GET /api/persona/handoffs': reply(away),
   'GET /api/persona/handoffs/count': reply({ pending: away.pending }),

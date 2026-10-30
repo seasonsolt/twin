@@ -874,25 +874,37 @@ export function Steps({
   label,
   steps,
   current,
+  compact = false,
 }: {
   /** Names the list, such as "步骤". */
   label: string;
   steps: string[];
   /** Index of the step under way. */
   current: number;
+  /** For many steps in a narrow place (a side layer): only the current step is named, the others are numbers. */
+  compact?: boolean;
 }) {
   return (
-    <ol aria-label={label} className="flex items-center gap-3 text-sm">
+    <ol
+      aria-label={label}
+      className={cn('flex items-center text-sm', compact ? 'gap-2' : 'gap-3')}
+    >
       {steps.map((step, index) => (
         <li
           key={step}
           aria-current={index === current ? 'step' : undefined}
           className={cn(
-            'flex items-center gap-3',
+            'flex items-center',
+            compact ? 'gap-2' : 'gap-3',
             index === current ? 'font-medium' : 'text-secondary',
           )}
         >
-          {index > 0 && <span aria-hidden className="h-px w-6 bg-border" />}
+          {index > 0 && (
+            <span
+              aria-hidden
+              className={cn('h-px bg-border', compact ? 'w-3' : 'w-6')}
+            />
+          )}
           <span className="flex items-center gap-1.5">
             <StepNumber
               size="sm"
@@ -906,7 +918,11 @@ export function Steps({
             >
               {index + 1}
             </StepNumber>
-            {step}
+            {!compact || index === current ? (
+              step
+            ) : (
+              <span className="sr-only">{step}</span>
+            )}
           </span>
         </li>
       ))}

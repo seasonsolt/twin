@@ -4,6 +4,7 @@ import { usePersonaId, usePersonaState } from '../../lib/usePersonaState';
 import { startStatusPolling, useStatus } from '../../stores/status';
 import { startSystemPolling } from '../../stores/system';
 import { Settings } from '../../features/settings/Settings';
+import { Will } from '../../features/will/Will';
 import {
   Card,
   Heading,
@@ -257,6 +258,7 @@ export function AppShell() {
       </div>
       {mobile && !twinLevel && <BottomTabs />}
       <Settings />
+      <Will />
       {/* Dropped files go to the team's recording library, which the persona edition does not have. */}
       {canManage && !mobile && !persona && <GlobalDrop />}
       <NewTwinHost />

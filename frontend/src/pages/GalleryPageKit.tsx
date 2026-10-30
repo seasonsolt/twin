@@ -41,6 +41,7 @@ import {
   Button,
   Card,
   Checkbox,
+  CheckGroup,
   Chip,
   Clip,
   Disclosure,
@@ -112,6 +113,8 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
   const [aspect, setAspect] = useState('D2');
   const [visibleRows, setVisibleRows] = useState(3);
   const [dragging, setDragging] = useState(false);
+  const [wholeAspect, setWholeAspect] = useState(false);
+  const [picked, setPicked] = useState(['2.1']);
   return (
     <Stack gap={6}>
       <Section title="人格画像">
@@ -689,6 +692,32 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
             disabled={disabled}
             onChange={(event) => setSample(event.target.checked)}
           />
+          <CheckGroup
+            label="价值观与原则"
+            whole={wholeAspect}
+            disabled={disabled}
+            items={[
+              ['2.1', '核心价值排序'],
+              ['2.2', '底线与原则'],
+              ['2.3', '信念与人生观'],
+            ].map(([id, label]) => ({
+              id,
+              label,
+              checked: picked.includes(id),
+            }))}
+            onWholeChange={(checked) => {
+              setWholeAspect(checked);
+              setPicked([]);
+            }}
+            onItemChange={(id, checked) => {
+              setWholeAspect(false);
+              setPicked((current) =>
+                checked
+                  ? [...current, id]
+                  : current.filter((item) => item !== id),
+              );
+            }}
+          />
           <Stack gap={0} role="radiogroup" aria-label="哪段是我">
             <Radio
               name="gallery-mine"
@@ -1059,6 +1088,12 @@ export function PageKitStories({ disabled }: { disabled: boolean }) {
           label="示例步骤（第二步）"
           steps={['认出你自己', '看看你的分身']}
           current={1}
+        />
+        <Steps
+          label="示例步骤（紧凑）"
+          steps={['称呼', '方面', '不谈', '声音', '退场', '口令']}
+          current={1}
+          compact
         />
         <Heading level={3}>拖到页面任意处 DropOverlay</Heading>
         <Checkbox

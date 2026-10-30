@@ -2,6 +2,7 @@ import {
   useId,
   useLayoutEffect,
   useRef,
+  useState,
   type ComponentProps,
   type ReactNode,
 } from 'react';
@@ -554,6 +555,89 @@ export function Segmented<T extends string>({
           </button>
         );
       })}
+    </div>
+  );
+}
+
+/**
+ * A checkbox for a whole group (an aspect) that opens to its items (its facets), one checkbox each. The group's box
+ * is ticked when the whole group is chosen and shows a dash when only some items are; beside it, how many of the
+ * items are chosen. Choosing the whole group ticks every item; the items are then shown as chosen with it.
+ */
+export function CheckGroup({
+  label,
+  whole,
+  items,
+  onWholeChange,
+  onItemChange,
+  disabled = false,
+}: {
+  label: string;
+  /** The whole group is chosen, everything in it now and later. */
+  whole: boolean;
+  items: { id: string; label: string; checked: boolean }[];
+  onWholeChange: (checked: boolean) => void;
+  onItemChange: (id: string, checked: boolean) => void;
+  disabled?: boolean;
+}) {
+  const box = useRef<HTMLInputElement>(null);
+  const [open, setOpen] = useState(false);
+  const listId = useId();
+  const chosen = whole ? items.length : items.filter((i) => i.checked).length;
+  const some = !whole && chosen > 0;
+  useLayoutEffect(() => {
+    if (box.current) box.current.indeterminate = some;
+  }, [some]);
+  return (
+    <div>
+      <div className="flex items-center gap-2">
+        <label
+          className={cn(
+            'inline-flex min-h-11 flex-1 items-center gap-3 md:min-h-9',
+            disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer',
+          )}
+        >
+          <input
+            ref={box}
+            type="checkbox"
+            checked={whole}
+            disabled={disabled}
+            onChange={(event) => onWholeChange(event.target.checked)}
+            className="size-4 shrink-0 accent-accent max-md:size-5"
+          />
+          <span>{label}</span>
+        </label>
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls={listId}
+          aria-label={`${label}的细项，选了 ${chosen} / ${items.length}`}
+          onClick={() => setOpen((value) => !value)}
+          className="inline-flex min-h-9 items-center gap-1 rounded-sm px-2 text-sm text-secondary tabular-nums hover:bg-soft"
+        >
+          {chosen}/{items.length}
+          <ChevronDown
+            aria-hidden
+            className={cn('size-4', open && 'rotate-180')}
+          />
+        </button>
+      </div>
+      {open && (
+        <ul id={listId} className="ml-7 grid">
+          {items.map((item) => (
+            <li key={item.id}>
+              <Checkbox
+                label={item.label}
+                checked={whole || item.checked}
+                disabled={disabled}
+                onChange={(event) =>
+                  onItemChange(item.id, event.target.checked)
+                }
+              />
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

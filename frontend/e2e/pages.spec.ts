@@ -485,6 +485,8 @@ const pages: {
       // 记忆 as a constellation of the ten aspects, and 资料 under the core, each piece as the thing it is.
       ['member-persona', '/#/profile', '十个方面', ''],
       ['member-persona-sources', '/#/memories', '已添加的记忆', ''],
+      // 数字遗嘱 in its side layer over the chat: one row per heir, the history folded.
+      ['will-persona', '/#/chat?will=', '加继承人', ''],
     ] as const
   ).map(([name, path, ready, conversation]) => ({
     name,
@@ -531,6 +533,40 @@ for (const { name, path, ready, viewport, setup } of pages) {
     expect(missing, 'requests without a mock in e2e/mockApi.ts').toEqual([]);
   });
 }
+
+test('name an heir: the aspects they may use', async ({ page }, info) => {
+  const missing: string[] = [];
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.clock.setFixedTime(NOW);
+  await mockApi(page, missing);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.route('**/api/whoami', (route) =>
+    route.fulfill({
+      json: {
+        email: null,
+        admin: true,
+        auth_enabled: false,
+        edition: 'persona',
+      },
+    }),
+  );
+  await page.goto('/#/chat?will=');
+  const will = page.getByRole('dialog', { name: '数字遗嘱' });
+  await will.getByLabel('小雨的操作').click();
+  await will.getByRole('button', { name: '修改' }).click();
+  // The second step: whole aspects ticked, one facet of another, that aspect opened to its facets.
+  const editor = page.getByRole('dialog', { name: '小雨' });
+  await editor.getByRole('button', { name: '下一步' }).click();
+  await editor.getByRole('button', { name: /^怎么做决定的细项/ }).click();
+  await expect(
+    editor.getByRole('checkbox', { name: '风险偏好' }),
+  ).toBeChecked();
+  await page.evaluate(() => document.fonts.ready);
+  await expect(page).toHaveScreenshot(`will-heir-${info.project.name}.png`);
+  expect(errors, 'page errors').toEqual([]);
+  expect(missing, 'requests without a mock in e2e/mockApi.ts').toEqual([]);
+});
 
 test('team continues the roster when its last rows scroll into view', async ({
   page,

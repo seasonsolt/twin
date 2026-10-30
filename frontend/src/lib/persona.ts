@@ -14,9 +14,22 @@ export function setPersonaId(id: string) {
     // Switching still works without storage.
   }
 }
+/** An heir's twin for this visit (P2.7): kept only in memory, so the person's own choice of twin stays as it was. */
+export function adoptPersonaId(id: string) {
+  current = id;
+}
+// While an heir is in, what this browser keeps of a twin is theirs alone: not the person's, nor another heir's.
+let heir = '';
+export function setHeirKeys(id: string) {
+  heir = id;
+}
 // Preserve existing default-persona history without migrating it.
 export const personaKey = (key: string, id = current) =>
-  id === 'default' ? key : `twin.persona:${id}:${key}`;
+  heir
+    ? `twin.heir:${heir}:${id}:${key}`
+    : id === 'default'
+      ? key
+      : `twin.persona:${id}:${key}`;
 export function forgetPersona(id: string) {
   const prefix = `twin.persona:${id}:`;
   for (const storage of [() => localStorage, () => sessionStorage]) {

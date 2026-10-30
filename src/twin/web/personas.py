@@ -814,6 +814,10 @@ class Personas:
                     self.removing.discard(persona_id)
 
 
+# The scope key of the twin an heir's session is to (``web.heir_door``): their requests reach that twin alone.
+HEIR_PERSONA_SCOPE = "twin_heir_persona"
+
+
 class PersonaMiddleware:
     def __init__(self, app: ASGIApp, registry: Personas) -> None:
         self.app, self.registry = app, registry
@@ -868,6 +872,11 @@ class PersonaMiddleware:
     ) -> tuple[FastAPI, str] | None:
         """The persona's route context, counted as in flight until ``leave``; None when there is no persona yet."""
         registry = self.registry
+        heir_persona = scope.get(HEIR_PERSONA_SCOPE)
+        if heir_persona is not None:
+            if persona_id not in (None, heir_persona):
+                raise HTTPException(403, "这里只有本人能看")
+            persona_id = heir_persona
         with registry.lock:
             if persona_id is not None:
                 scope["twin_visitor"] = registry.check_access(persona_id, identity, str(scope["method"]), path)
@@ -886,8 +895,10 @@ class PersonaMiddleware:
             context = registry.application(persona_id)
             scope["twin_audience"] = registry.audience(registry.entry(persona_id), identity)
             # The person the twin is made for, known to be who is asking (``alone``, or by their account).
-            scope["twin_person"] = (registry.alone(identity) or bool(identity.get("auth_enabled"))) and scope[
-                "twin_audience"
-            ] == SELF
+            scope["twin_person"] = (
+                heir_persona is None
+                and (registry.alone(identity) or bool(identity.get("auth_enabled")))
+                and scope["twin_audience"] == SELF
+            )
             registry.enter(persona_id)
             return context, persona_id

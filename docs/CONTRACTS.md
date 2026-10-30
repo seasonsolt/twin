@@ -24,7 +24,7 @@ Positioning: Identity → Memory upload → Service. Repository, project, Python
 ## 生前 / 身后与冻结（P2.5）
 
 - `persona.lifecycle`（代码层 4）：状态记在分身库 `p_meta`，不需要迁移、随数据库一起拷走。`lifecycle` 为 `alive`（没有这个键时也是）或 `sealed`；`lifecycle:sealed_at` 是冻结时间（UTC，ISO 8601，到秒），只在 `sealed` 时有意义。`state` / `sealed` / `sealed_at` 读状态，`sealed_path(db_path)` 只读打开、不迁移，供每个请求检查；`refuse_if_sealed` 冻结时抛 `MemorySealed`。
-- `seal(store)` 只供测试和以后的继承人开启（P2.7）调用，没有网页入口：先 `store.snapshot("sealed")`（`kernel-snapshots/<库名>-<时间>-sealed.db`，0600），再在同一事务里写两个键，返回快照路径；已冻结时什么都不做，返回 null。冻结前的快照不计入“每个分身保留最近 3 份”，之后的迁移、重整、恢复快照都不会把它挤掉。冻结不可在网页上撤回，回退见 `docs/LOCAL_DEV.md#回退记忆内核`。
+- `seal(store)` 由继承人第一次开启（P2.7，见下）调用，没有别的网页入口：先 `store.snapshot("sealed")`（`kernel-snapshots/<库名>-<时间>-sealed.db`，0600），再在同一事务里写两个键，返回快照路径；已冻结时什么都不做，返回 null。冻结前的快照不计入“每个分身保留最近 3 份”，之后的迁移、重整、恢复快照都不会把它挤掉。冻结不可在网页上撤回，回退见 `docs/LOCAL_DEV.md#回退记忆内核`。
 - **拒绝写入**：分身应用里的 `SealedMiddleware`（与 `MemoryGateMiddleware` 同一层）对 `/api/persona`、`/api/uploads`、`/api/identity`、`/api/me`、`/api/kernel` 下除 GET/HEAD/OPTIONS 以外的所有请求，除 `/api/persona/chat`（含 `stream`、`stream-with-files`）外，在冻结后一律返回 **423** `{"detail": "记忆已冻结，不能再改动", "code": "memory_sealed"}`，不进路由、不改库。按前缀默认拒绝，以后新加的写接口同样被拒；完整清单在 `tests/test_lifecycle.py` 的 `SEALED` / `OPEN`，新接口必须归入其一。照常的写：对话（`/api/persona/chat*`）、会话本身（`/api/conversations`）、朗读和视频（`/api/media/*`）、渠道（`/api/channels/wecom`）。路由里抛出的 `MemorySealed` 同样回 423。
 - **对话不留痕**：`PersonaChat` 在冻结时照常检索和回答，但不写 `p_chat_log`（所以覆盖度的提问需求 `chat_demand` 不再增加）、不产生承诺（`promise_*` 为空，`record_promise` 对冻结的库也什么都不做）；“记一下”回固定的 `SEALED_NOTE_REPLY`“记忆已经冻结，这句不会记下。”，元数据没有 `note`，不新增来源、不排队整理。会话的提问和回答仍存进会话（`conversation_turns`），之后可以翻看。
 - **后台和命令行**：冻结后 `stale_reason` 为 null、`GET /api/status` 的 `kernel.scope` 为 `none`；启动时只做打开数据库时不调用模型的细项编号迁移，不恢复中断的导入、不重新抽取或合并、不排队整理，检索向量照常按当前向量模型补齐（只找已有的内容）。排队中的整理执行时直接返回 `{"sealed": true}`；`build_profile` 对冻结的库抛 `MemorySealed`；录音库不再向冻结的分身写资料；承诺账本的整理（包括系统设置里的升级）被拒。`twin persona import|note|reextract|build` 和 `twin kernel rebuild --persona` 失败退出（“记忆已冻结，不能再改动”），`twin kernel rebuild --all` 跳过冻结的分身；`twin persona chat`、服务接口 `/v1/ask`、MCP 和渠道照常回答，同样不留痕。`twin kernel restore` 不受冻结限制。
@@ -63,6 +63,37 @@ Positioning: Identity → Memory upload → Service. Repository, project, Python
   搜索的词本身命中不谈的话题时返回空）；`GET /api/persona/sources/{id}/text`（只留给他的原话，没有一句时 404）；`GET /api/persona/coverage`
   （按给他的条目算，不带提问需求）；`GET /api/persona/life-story`（同上，本人以外只有继承人能读）；`/api/conversations` 的列表、新建、读、改名、删除。
   页面和静态资源不受影响。
+
+## 继承人开启（P2.7）
+
+- `persona/heir_door.py`（代码层 4）。schema 10（`_MIGRATIONS` 第 10 条，`KernelVersion.schema` 随之为 10，不触发重新整理；升级前自动快照）加两张表：
+  `p_heir_sessions (hash TEXT PRIMARY KEY, heir_id TEXT NOT NULL, expires REAL NOT NULL)`：继承人会话，只存 cookie 里令牌的 SHA-256，
+  `expires` 是 Unix 秒（开启或进入后 `SESSION_SECONDS` = 12 小时），新建会话时顺手删掉过期的；
+  `p_heir_log (id INTEGER PRIMARY KEY AUTOINCREMENT, at, heir_id, event)`：`at` 为 UTC ISO 8601（到秒），`event` 是 `open`（第一次开启，冻结了记忆）、
+  `enter`（冻结后凭口令进入）或 `fail`（称呼或口令不对，`heir_id` 为空，不记填的是谁）；两个触发器拒绝 `UPDATE` / `DELETE`，只追加。
+  两张表都不在检索读的表里，写它们不改记忆版本；从冻结前的快照回退后，会话和开启记录一起回到快照那一刻。口令和令牌都不落盘、不进日志。
+- **开启**：`open_door(store, name, password, confirm, now)`。称呼按遗嘱里的称呼比较（忽略大小写和多余空格）；称呼不在遗嘱里时也对一份随机口令
+  的哈希算一次 scrypt，两种错误耗时相同、回答相同（`WrongWord`）。还没冻结时，称呼和口令都对但没有 `confirm`：返回 null，什么都不改；有 `confirm`：
+  `lifecycle.seal`（先快照）后建会话、记 `open`。已冻结时直接建会话、记 `enter`。退场（P2.8）还没做，过了 `retire_on` 的继承人现在照样能进入。
+- **冷却**：从最后一次 `open` / `enter` 之后数 `fail`，连续 `MAX_TRIES` = 5 次起，最后一次错误后等 `FIRST_COOLDOWN` = 60 秒，之后每多错一次翻倍，
+  最长 `MAX_COOLDOWN` = 3600 秒；不分称呼（换着称呼猜一样计数）。冷却中不核对口令、不计数（对的口令也被拒）。计数从日志算，重启服务不清零。
+- **会话**：`session_at(db_path, token, now)` 只读打开分身库（不迁移），在记忆已冻结、会话没过期、遗嘱里仍有这位继承人时返回
+  `Session(heir_id, name, person)`（`person` 是 `identity:name`，可空）；否则 null。
+- **网页**（`web/heir_door.py`，挂在每个分身的应用里，经 `PersonaMiddleware` 进入；不在 `/api/persona` 下，冻结后照常可用，`tests/test_lifecycle.py` 归在 `OPEN`）：
+  - `POST /api/heir/open` `{name ≤64, password ≤128, confirm?: false}` → `{status: "confirm"}`（第一次开启，等确认）或
+    `{status: "open", heir: {id, name}, sealed_now}` 并设 cookie；称呼或口令不对 **400** `{"detail": "称呼或口令不对", "code": "heir_wrong"}`；
+    冷却中（包括这次错误让它开始冷却）**429** `{"detail": "试错太多次，请 N 分钟后再试", "code": "heir_cooldown", "retry_after": 秒}`，带 `Retry-After`。
+  - cookie `twin_heir` = `<分身编号>.<令牌>`，HttpOnly、SameSite=Strict、不设过期（关掉浏览器就没了；服务端 12 小时后失效），路径随
+    `X-Forwarded-Prefix`，HTTPS 时 Secure。
+  - `POST /api/heir/leave` → `{ok: true}`：删掉这个会话和 cookie。
+  - `HeirSessionMiddleware`（主应用里，登录之后、`HeirMiddleware` 之前）：cookie 打开一个活的会话时设 `scope["twin_heir"]`（继承人编号）、
+    `scope["twin_heir_persona"]`（`personas.HEIR_PERSONA_SCOPE`）和 `scope["twin_heir_view"]`（`auth.HEIR_VIEW`）；分身编号只认注册表里有的。
+    打不开任何东西的 cookie 什么都不改。`PersonaMiddleware` 对继承人的请求固定进他开启的分身，指名别的分身 403，`twin_person` 恒为 false。
+  - `GET /api/whoami` 对继承人多 `heir: {id, name, person, persona}`，`admin` 为 false。
+  - `HEIR_ALLOWED` 加了 `GET /api/whoami`、`POST /api/heir/open`、`POST /api/heir/leave`；其余照 P2.4。
+- **前端**：`features/heir`。`whoami` 带 `heir` 时整个页面只有 `HeirChat`（标题“X 的记忆延续”，下面一行“不是 X 本人”；以前的对话、新对话、离开），
+  不读分身列表；本机存的“当前对话”等按 `twin.heir:<继承人>:<分身>:` 另存，和本人、别的继承人分开。个人版桌面侧栏底部一个 ghost 小按钮
+  “我是继承人”打开 `HeirDoor`。
 
 ## Identity 与用户建档
 
@@ -197,7 +228,7 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
   遗嘱没写的什么都不给。`avoid` 是不谈的话题（去重，至多 20 条、每条 60 字）；`voice` / `likeness` 默认 false，P2 只存；
   `retire_on` 可空（不退场）；`farewell` 可空（用默认告别）。同一份遗嘱里称呼不重复（P2.7 按称呼加口令开启）；口令 6–128 个字符。
   分类升级时（`_migrate_taxonomy`）继承人的 `facets` 按 `TAXONOMY_MIGRATIONS` 改号：拆开的给全部新细项，删掉的不再给，记一行 `taxonomy`（`actor` 为 `twin`）。
-  核对口令用 `will.verify(store, heir_id, password)`（按存下的参数重算，`hmac.compare_digest` 比较）。
+  核对口令用 `will.verify(store, heir_id, password)`（按存下的参数重算，`hmac.compare_digest` 比较；`will.matches(stored, password)` 是同一比较，供开启时对不存在的称呼也算一次）。
   接口都只给本人（`web/handoffs.py` 的 `person`，别人 403），口令只在请求里出现：
   `GET /api/persona/will` → `{heirs: [Heir], sealed}`（`sealed` 为 true 时记忆已冻结，遗嘱不能再改）；`POST /api/persona/will/heirs` `{name, relation?, aspects?, facets?, avoid?, voice?, likeness?, retire_on?, farewell?, password}`
   → `{heir}`（没有口令或不合要求 400）；`PUT /api/persona/will/heirs/{heir_id}` 同样的字段整份重写，`password` 省略则保留原口令 → `{heir}`，找不到 404；

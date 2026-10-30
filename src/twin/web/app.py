@@ -39,7 +39,7 @@ from ..teamanswers import TeamAnswers
 from ..teamdb import TeamDB, team_path
 from ..usage import UsageLedger, UsageRecorder, install_default
 from . import ask as ask_routes
-from . import assets, gpu, library, media, minutes, persona, system, team_answers, voice
+from . import assets, gpu, heir_door, library, media, minutes, persona, system, team_answers, voice
 from . import delegation as delegation_routes
 from . import lenses as lens_routes
 from .auth import Auth, AuthMiddleware, forwarded_prefix
@@ -472,6 +472,8 @@ def create_app(
     app.add_middleware(PersonaMiddleware, registry=registry)
     # An heir reaches only what is meant for them (P2.4), whether a twin's route or the app's own.
     app.add_middleware(persona.HeirMiddleware)
+    # An heir's session cookie makes the request theirs (P2.7), before what an heir may reach is checked.
+    app.add_middleware(heir_door.HeirSessionMiddleware, registry=registry)
     # Between sign-in and the twin's own routes, which PersonaMiddleware calls directly.
     app.add_middleware(system.FeatureGate, system=system_settings)
     app.add_middleware(AuthMiddleware, auth=auth)
@@ -648,6 +650,7 @@ def create_app(
             delegations=delegations,
         )
         delegation_routes.register(context, delegations, desk, backends, request_asker_name, scoped_jobs)
+        heir_door.register(context, persona_id, ingestion.lock, lambda: PersonaStore(resolved.db_path))
         lens_routes.register(
             context,
             resolved,

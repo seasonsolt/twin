@@ -35,6 +35,8 @@ from ..config import AuthSettings, SMTPSettings
 from ..util import private_directory
 
 COOKIE = "twin_session"
+# The scope key of the heir a request comes from, as ``/api/whoami`` tells the page (``web.heir_door``).
+HEIR_VIEW = "twin_heir_view"
 # Sessions of twin's own accounts are keyed ``user:<name>``; e-mail sessions by the address.
 USER = "user:"
 USERNAME = re.compile(r"[a-z0-9][a-z0-9._@-]{0,63}")
@@ -551,7 +553,11 @@ class Auth:
             identity = request.scope.get("twin_identity")
             if not identity:
                 return login_required(self.login_url())
-            return JSONResponse({**{k: v for k, v in identity.items() if k != "photo"}, **self.extra()})
+            body = {**{k: v for k, v in identity.items() if k != "photo"}, **self.extra()}
+            # An heir's browser is theirs while their session lasts, whoever it is signed in as: nothing to manage.
+            if heir := request.scope.get(HEIR_VIEW):
+                body |= {"heir": heir, "admin": False}
+            return JSONResponse(body)
 
         @app.get("/api/admin/waitlist")
         def waitlist(request: Request) -> list[dict[str, Any]]:

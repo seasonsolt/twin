@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import {
   awayMerged,
+  heirConversation,
   lensChoices,
   lensList,
   mockApi,
@@ -509,6 +510,48 @@ const pages: {
       }, conversation);
     },
   })),
+  // An heir who opened the twin (P2.7): their own conversation alone, saying whose memory it carries on.
+  {
+    name: 'chat-heir',
+    path: '/#/chat',
+    ready: '认准了就不撒手',
+    setup: async (page: Page) => {
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      await page.route('**/api/whoami', (route) =>
+        route.fulfill({
+          json: {
+            email: null,
+            admin: false,
+            auth_enabled: false,
+            edition: 'persona',
+            heir: {
+              id: 'heir_yu',
+              name: '小雨',
+              person: '林舟',
+              persona: 'default',
+            },
+          },
+        }),
+      );
+      await page.route('**/api/conversations', (route) =>
+        route.fulfill({
+          json: [
+            {
+              id: heirConversation.id,
+              title: heirConversation.title,
+              updated_at: '2026-10-17T01:30:08Z',
+            },
+          ],
+        }),
+      );
+      await page.addInitScript((opened) => {
+        localStorage.setItem(
+          'twin.heir:heir_yu:default:twin.current.conversation',
+          opened,
+        );
+      }, heirConversation.id);
+    },
+  },
 ];
 
 for (const { name, path, ready, viewport, setup } of pages) {
@@ -564,6 +607,50 @@ test('name an heir: the aspects they may use', async ({ page }, info) => {
   ).toBeChecked();
   await page.evaluate(() => document.fonts.ready);
   await expect(page).toHaveScreenshot(`will-heir-${info.project.name}.png`);
+  expect(errors, 'page errors').toEqual([]);
+  expect(missing, 'requests without a mock in e2e/mockApi.ts').toEqual([]);
+});
+
+// 我是继承人 (P2.7), on the persona edition's side bar (which phones do not have): the name and word, then the seal said
+// once before anything opens.
+test('heir door: the seal is said before it opens', async ({ page }, info) => {
+  test.skip(info.project.name === 'mobile', 'the side bar is for desktops');
+  const missing: string[] = [];
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.clock.setFixedTime(NOW);
+  await mockApi(page, missing);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.route('**/api/whoami', (route) =>
+    route.fulfill({
+      json: {
+        email: null,
+        admin: true,
+        auth_enabled: false,
+        edition: 'persona',
+      },
+    }),
+  );
+  await page.goto('/#/chat');
+  // The page behind the door settles first: the empty chat and the list beside it.
+  await expect(page.getByText('和林舟聊聊').first()).toBeVisible();
+  await expect(page.getByText('招聘面试的问题').first()).toBeVisible();
+  await page.getByRole('button', { name: '我是继承人' }).click();
+  const door = page.getByRole('dialog', { name: '我是继承人' });
+  await door.getByLabel('称呼').fill('小雨');
+  await door.getByLabel('口令').fill('开启口令123');
+  await page.evaluate(() => document.fonts.ready);
+  await expect(page).toHaveScreenshot(`heir-door-${info.project.name}.png`, {
+    timeout: 15_000,
+  });
+  await door.getByRole('button', { name: '进入' }).click();
+  await expect(
+    page.getByRole('dialog', { name: '开启后记忆冻结' }),
+  ).toBeVisible();
+  await expect(page).toHaveScreenshot(
+    `heir-door-confirm-${info.project.name}.png`,
+    { timeout: 15_000 },
+  );
   expect(errors, 'page errors').toEqual([]);
   expect(missing, 'requests without a mock in e2e/mockApi.ts').toEqual([]);
 });

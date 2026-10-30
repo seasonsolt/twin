@@ -109,6 +109,17 @@ BEGIN SELECT RAISE(ABORT, 'p_will_history is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS p_will_history_no_delete BEFORE DELETE ON p_will_history
 BEGIN SELECT RAISE(ABORT, 'p_will_history is append-only'); END;
 """
+# 继承人开启 (``persona.heir_door``): the sessions of heirs who opened the twin with their word (only a hash of each
+# cookie's token), and every opening, entry and wrong word, written once, never changed or deleted.
+_HEIR_DOOR = """
+CREATE TABLE IF NOT EXISTS p_heir_sessions (hash TEXT PRIMARY KEY, heir_id TEXT NOT NULL, expires REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS p_heir_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, heir_id TEXT NOT NULL, event TEXT NOT NULL);
+CREATE TRIGGER IF NOT EXISTS p_heir_log_no_update BEFORE UPDATE ON p_heir_log
+BEGIN SELECT RAISE(ABORT, 'p_heir_log is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS p_heir_log_no_delete BEFORE DELETE ON p_heir_log
+BEGIN SELECT RAISE(ABORT, 'p_heir_log is append-only'); END;
+"""
 _MIGRATIONS: tuple[str, ...] = (
     _SCHEMA,
     # 2: per-chunk extraction counts (``ExtractStats`` JSON); NULL for chunks extracted before it.
@@ -132,6 +143,8 @@ _MIGRATIONS: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS p_sources_kind ON p_sources(kind);",
     # 9: 数字遗嘱 (``persona.will``).
     _WILL,
+    # 10: 继承人开启 (``persona.heir_door``).
+    _HEIR_DOOR,
 )
 
 
@@ -1293,6 +1306,39 @@ class PersonaStore:
         with self._lock:
             rows = self._db.execute("SELECT at, actor, action, heir_id, json FROM p_will_history ORDER BY id")
             return [tuple(r) for r in rows]
+
+    def log_heir(self, at: str, heir_id: str, event: str) -> None:
+        """One more line of the heirs' log (``persona.heir_door``): when, which heir (none for a wrong try), what."""
+        with self._tx() as db:
+            db.execute("INSERT INTO p_heir_log (at, heir_id, event) VALUES (?, ?, ?)", (at, heir_id, event))
+
+    def heir_log(self) -> list[tuple[str, str, str]]:
+        """The heirs' log, oldest first: when, which heir, what."""
+        with self._lock:
+            return [tuple(r) for r in self._db.execute("SELECT at, heir_id, event FROM p_heir_log ORDER BY id")]
+
+    def heir_failures(self, success: tuple[str, ...]) -> tuple[int, str | None]:
+        """How many lines of the heirs' log are ``fail`` since the last of the ``success`` events, and when the last of
+        them was."""
+        marks = ",".join("?" * len(success))
+        with self._lock:
+            since = self._db.execute(
+                f"SELECT COALESCE(MAX(id), 0) FROM p_heir_log WHERE event IN ({marks})", success
+            ).fetchone()[0]
+            count, last = self._db.execute(
+                "SELECT COUNT(*), MAX(at) FROM p_heir_log WHERE id > ? AND event = 'fail'", (since,)
+            ).fetchone()
+        return int(count), last
+
+    def add_heir_session(self, token_hash: str, heir_id: str, expires: float, now: float) -> None:
+        """Keep a new heir session, and forget those that have ended."""
+        with self._tx() as db:
+            db.execute("DELETE FROM p_heir_sessions WHERE expires <= ?", (now,))
+            db.execute("INSERT INTO p_heir_sessions VALUES (?, ?, ?)", (token_hash, heir_id, expires))
+
+    def end_heir_session(self, token_hash: str) -> None:
+        with self._tx() as db:
+            db.execute("DELETE FROM p_heir_sessions WHERE hash = ?", (token_hash,))
 
     def speaker_names(self) -> SpeakerNames:
         return SpeakerNames(

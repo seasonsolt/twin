@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router';
 import { Button, Skeleton } from '../../components/ui';
 import { ApiError } from '../../lib/api';
@@ -7,6 +7,10 @@ import { usePersonas } from '../../stores/personas';
 import { useTheme } from '../../stores/theme';
 import { Login } from './Login';
 import { local, loginPath, takeReturn } from './returnTo';
+
+const HeirChat = lazy(() =>
+  import('../heir/HeirChat').then((module) => ({ default: module.HeirChat })),
+);
 
 /**
  * Everything behind signing in. Signed out, every address leads to ``#/login``, which keeps the page asked for
@@ -87,6 +91,13 @@ export function AuthGate({ children }: { children: ReactNode }) {
         to={signedOut ? '/login' : loginPath(pathname + search)}
         replace
       />
+    );
+  // An heir who opened the twin (P2.7) has their own conversation and nothing else, whatever the address.
+  if (identity.heir)
+    return (
+      <Suspense fallback={<Skeleton className="mx-auto mt-12 h-64 max-w-sm" />}>
+        <HeirChat key={identity.heir.id} heir={identity.heir} />
+      </Suspense>
     );
   return pathname === '/login' ? (
     <Navigate

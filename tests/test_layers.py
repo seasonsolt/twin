@@ -85,6 +85,7 @@ LAYERS: dict[str, int] = {
     "websearch": 2,
     "persona.store": 3,
     "persona.gate": 4,
+    "persona.lifecycle": 4,
     "persona.sources": 4,
     "persona.text": 4,
     "persona.quotes": 4,

@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict
 from ..config import Settings
 from ..embed import Embedder, EmbedError
 from ..llm import LLM
-from ..persona.assistant import DEFAULT_NOTE_TIER, NOTE_REPLY, NOTE_TITLE
+from ..persona.assistant import DEFAULT_NOTE_TIER, NOTE_REPLY, NOTE_TITLE, SEALED_NOTE_REPLY
 from ..persona.chat import PersonaChat, PersonaContext
 from ..persona.dimensions import FACET_BY_ID
 from ..persona.schema import ChatReply
@@ -51,10 +51,11 @@ def keep_note(store: PersonaStore, settings: Settings, text: str, stamp: dt.date
     return {"id": parsed.source.source_id, "text": text, "tier": DEFAULT_NOTE_TIER}
 
 
-def note_reply() -> ChatReply:
-    """What the assistant says to a note: nothing was looked up, so it rests on nothing."""
+def note_reply(sealed: bool = False) -> ChatReply:
+    """What the assistant says to a note: nothing was looked up, so it rests on nothing. ``sealed``: the memory is
+    sealed, so the note was not kept."""
     return ChatReply(
-        reply=NOTE_REPLY,
+        reply=SEALED_NOTE_REPLY if sealed else NOTE_REPLY,
         citations=[],
         confidence=1.0,
         abstain=False,

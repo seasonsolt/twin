@@ -39,6 +39,7 @@ from .persona.coverage import report_markdown as coverage_markdown
 from .persona.dimensions import requires_consent
 from .persona.gate import MemoryUpdating
 from .persona.kernel import KERNEL, rebuild_scope
+from .persona.lifecycle import MemorySealed, sealed
 from .persona.profile import (
     KERNEL_STALE_NOTICE,
     STALE_PROFILE_NOTICE,
@@ -795,6 +796,14 @@ def _persona_store(settings: Settings) -> PersonaStore:
         return PersonaStore(settings.db_path)
 
 
+def _unsealed(store: PersonaStore) -> PersonaStore:
+    """``store``, unless its memory is sealed (``persona.lifecycle``), which nothing changes any more."""
+    if sealed(store):
+        store.close()
+        raise _fail(str(MemorySealed()))
+    return store
+
+
 identity_app = typer.Typer(help="查看配置的只读身份与出境状态。", no_args_is_help=True)
 app.add_typer(identity_app, name="identity")
 
@@ -1023,6 +1032,16 @@ def kernel_rebuild(
     ]
     if not selected:
         raise _fail("分身不存在")
+    frozen = []
+    for pid, resolved in selected:
+        with _persona_store(resolved) as store:
+            if sealed(store):
+                frozen.append(pid)
+    if frozen and not all_personas:
+        raise _fail(str(MemorySealed()))
+    for pid in frozen:
+        _say(f"分身 {pid}：记忆已冻结，跳过")
+    selected = [(pid, resolved) for pid, resolved in selected if pid not in frozen]
     for pid, resolved in selected:
         with _persona_store(resolved) as store:
             count = pending_chunks(store, resolved)
@@ -1051,7 +1070,7 @@ def persona_import(
     """导入资料。同一个文件内容不变时重复导入只会覆盖，不会重复。"""
     settings = _settings(ctx)
     when = _optional_date(date, "--date")
-    with _persona_store(settings) as store:
+    with _unsealed(_persona_store(settings)) as store:
         for path in paths:
             if not path.is_file():
                 raise _fail(f"找不到文件 {path}")
@@ -1079,7 +1098,7 @@ def persona_import(
 @persona_app.command("note")
 def persona_note(ctx: typer.Context, text: Annotated[str, typer.Argument(help="要记住的文字")]) -> None:
     settings = _settings(ctx)
-    with _errors(), _persona_store(settings) as store:
+    with _errors(), _unsealed(_persona_store(settings)) as store:
         parsed = parse_note(text, settings)
         store.put_source(parsed)
     _say(f"已添加 {parsed.source.title}")
@@ -1121,7 +1140,7 @@ def persona_reextract(
 ) -> None:
     """让模型重新抽取指定资料：资料没变也重抽，下次构建时生效。"""
     settings = _settings(ctx)
-    with _persona_store(settings) as store:
+    with _unsealed(_persona_store(settings)) as store:
         selected = list(dict.fromkeys(source_ids or []))
         if missing := [sid for sid in selected if store.get_source(sid) is None]:
             raise _fail(f"找不到资料：{'、'.join(missing)}")
@@ -1160,7 +1179,7 @@ def persona_reextract(
 def persona_build(ctx: typer.Context) -> None:
     """抽取并合并人格档案，再更新检索向量；只处理新增或变化的部分。"""
     settings = _settings(ctx)
-    with _persona_store(settings) as store:
+    with _unsealed(_persona_store(settings)) as store:
         if profile_stale(store):
             _progress(KERNEL_STALE_NOTICE if stale_reason(store) == "kernel" else STALE_PROFILE_NOTICE)
         llm = _llm(settings)

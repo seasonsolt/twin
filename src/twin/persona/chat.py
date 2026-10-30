@@ -36,7 +36,7 @@ from ..llm import LLM, LLMError, hedged_stream
 from ..media.minutes import MinutesPoint, read_minutes, recording_of
 from ..usage import default_stage
 from ..util import Progress, date_from_name
-from . import gate
+from . import gate, lifecycle
 from .assistant import ASSISTANT_MEETING_SECTION, ASSISTANT_STREAM_FORMAT, ASSISTANT_SYSTEM
 from .attachments import AttachmentPassage
 from .connect import connect
@@ -785,7 +785,8 @@ class PersonaChat:
         only the self tier has one. ``asker``: who is asking, so the twin can say whom it is talking to.
         ``reflection``: a way of talking with the assistant about oneself (``persona.reflection``); only the
         assistant has them. A message that speaks of ending one's life or harming oneself is answered by the crisis
-        guard (``persona.crisis``) before anything else, whoever asks."""
+        guard (``persona.crisis``) before anything else, whoever asks. A twin whose memory is sealed
+        (``persona.lifecycle``) answers as ever but leaves nothing in it: no question logged, no promise kept."""
         self.audience = audience
         self.asker = asker
         self.assistant = assistant and audience == SELF_AUDIENCE
@@ -799,6 +800,7 @@ class PersonaChat:
         self.settings = settings
         self.ledger = ledger and audience == SELF_AUDIENCE
         self.library_db = gate.library_db(store)
+        self.sealed = lifecycle.sealed(store)
 
     def retrieve(
         self,
@@ -1258,8 +1260,8 @@ class PersonaChat:
         persist: bool,
         verified: bool = True,
     ) -> ChatReply:
-        # A way of looking at oneself keeps no promise (``persona.reflection``).
-        promising = self.assistant and not ctx.reflection
+        # A way of looking at oneself keeps no promise (``persona.reflection``), and nor does a sealed memory.
+        promising = self.assistant and not ctx.reflection and not self.sealed
         text, quotes_removed = remove_unverified_quotes(draft.reply, [*_quote_materials(ctx), messages[-1].content])
         # Record ids belong in citations, not in the text the person reads; move any the reply wrote inline.
         inline = [m.group(1) for m in INLINE_ID.finditer(text) if m.group(1) in ctx.ids]
@@ -1316,8 +1318,9 @@ class PersonaChat:
             promise_to=draft.promise_to.strip()[:60] if promising and draft.promise_what.strip() else "",
             promise_due=_iso_date(draft.promise_due) if promising and draft.promise_what.strip() else None,
         )
-        # Looking at oneself is not a question the twin failed or was asked to know more about.
-        if persist and not ctx.reflection:
+        # Looking at oneself is not a question the twin failed or was asked to know more about; a sealed memory
+        # counts no question asked of it.
+        if persist and not ctx.reflection and not self.sealed:
             asked = [m.content for m in messages if m.role == "user"]
             self.store.log_chat(asked[-1], reply, asked[-2] if len(asked) > 1 else "")
         return reply

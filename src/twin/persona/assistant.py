@@ -27,6 +27,7 @@ import uuid
 from typing import Any
 
 from .ledger import SELF as LEDGER_SELF
+from .lifecycle import sealed
 from .schema import LedgerEntry, ReviewStatus
 from .store import PersonaStore
 from .tiers import SELF, Tier
@@ -42,6 +43,8 @@ NOTE_CUE = re.compile(
 DEFAULT_NOTE_TIER: Tier = SELF
 NOTE_TITLE = "记一下"
 NOTE_REPLY = "记下了，先设为只有你能用。"
+# A note asked of a sealed memory (``persona.lifecycle``): nothing grows in it any more.
+SEALED_NOTE_REPLY = "记忆已经冻结，这句不会记下。"
 NOTE_MIN_CHARS = 2
 
 
@@ -136,7 +139,8 @@ def record_promise(store: PersonaStore, conversation_id: str | None, payload: di
     has to take it), and the reply says so. Without a conversation to name it by it is a one-off id; a ledger that
     cannot be written drops the promise from the reply, so the reply never claims it was kept."""
     what = str(payload.get("promise_what") or "").strip()
-    if not what:
+    # A sealed memory keeps no promise (``lifecycle``); the chat leaves none to keep, and this holds for any caller.
+    if not what or sealed(store):
         return
     key = conversation_id or f"loose-{uuid.uuid4().hex[:12]}"
     seq = (store.last_turn_seq(conversation_id) or 0) + 1 if conversation_id else 0

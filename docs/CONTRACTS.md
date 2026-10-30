@@ -21,6 +21,14 @@ Positioning: Identity → Memory upload → Service. Repository, project, Python
 - `[kernel] auto_rebuild=true`、`max_auto_rebuild_chunks=400`、`max_concurrent`（整理记忆时同时发给模型的请求数，1–64，未设时等于 `max_workers`；每次调用前读取，改了对正在进行的整理也生效）；启动时有内核差异且禁用自动重建或待重抽数量超过阈值时等待确认。`GET /api/status` 返回 `kernel: {version, built, scope, pending_chunks, state}`，state 为 ready/pending/queued/running/error/awaiting_confirmation；version/built 为版本对象，未记录 built 为 null；还没有资料和条目的分身 scope 为 none。三个 `[kernel]` 参数可在设置「记忆」里由管理员改写（`data/system.json`，立即生效）。`processing.notice` 在等待确认时为“记忆内核已升级，需要管理员确认后重新整理；目前沿用旧档案”。
 - `POST /api/kernel/rebuild` 使用当前分身，要求管理员及 `X-Twin: 1`，返回 202 `{job_id}`；复用原有互斥构建任务。设置「记忆」用 `GET/POST /api/admin/system/components[/kernel]` 一次查看和升级所有分身（见 WEB_UI.md）。`twin kernel status` 逐分身显示版本、数据库实际 schema、范围和分段数；`twin kernel rebuild [--persona ID|--all] [--yes]` 默认配置分身，超过阈值必须显式 `--yes`。
 
+## 生前 / 身后与冻结（P2.5）
+
+- `persona.lifecycle`（代码层 4）：状态记在分身库 `p_meta`，不需要迁移、随数据库一起拷走。`lifecycle` 为 `alive`（没有这个键时也是）或 `sealed`；`lifecycle:sealed_at` 是冻结时间（UTC，ISO 8601，到秒），只在 `sealed` 时有意义。`state` / `sealed` / `sealed_at` 读状态，`sealed_path(db_path)` 只读打开、不迁移，供每个请求检查；`refuse_if_sealed` 冻结时抛 `MemorySealed`。
+- `seal(store)` 只供测试和以后的继承人开启（P2.7）调用，没有网页入口：先 `store.snapshot("sealed")`（`kernel-snapshots/<库名>-<时间>-sealed.db`，0600），再在同一事务里写两个键，返回快照路径；已冻结时什么都不做，返回 null。冻结前的快照不计入“每个分身保留最近 3 份”，之后的迁移、重整、恢复快照都不会把它挤掉。冻结不可在网页上撤回，回退见 `docs/LOCAL_DEV.md#回退记忆内核`。
+- **拒绝写入**：分身应用里的 `SealedMiddleware`（与 `MemoryGateMiddleware` 同一层）对 `/api/persona`、`/api/uploads`、`/api/identity`、`/api/me`、`/api/kernel` 下除 GET/HEAD/OPTIONS 以外的所有请求，除 `/api/persona/chat`（含 `stream`、`stream-with-files`）外，在冻结后一律返回 **423** `{"detail": "记忆已冻结，不能再改动", "code": "memory_sealed"}`，不进路由、不改库。按前缀默认拒绝，以后新加的写接口同样被拒；完整清单在 `tests/test_lifecycle.py` 的 `SEALED` / `OPEN`，新接口必须归入其一。照常的写：对话（`/api/persona/chat*`）、会话本身（`/api/conversations`）、朗读和视频（`/api/media/*`）、渠道（`/api/channels/wecom`）。路由里抛出的 `MemorySealed` 同样回 423。
+- **对话不留痕**：`PersonaChat` 在冻结时照常检索和回答，但不写 `p_chat_log`（所以覆盖度的提问需求 `chat_demand` 不再增加）、不产生承诺（`promise_*` 为空，`record_promise` 对冻结的库也什么都不做）；“记一下”回固定的 `SEALED_NOTE_REPLY`“记忆已经冻结，这句不会记下。”，元数据没有 `note`，不新增来源、不排队整理。会话的提问和回答仍存进会话（`conversation_turns`），之后可以翻看。
+- **后台和命令行**：冻结后 `stale_reason` 为 null、`GET /api/status` 的 `kernel.scope` 为 `none`；启动时只做打开数据库时不调用模型的细项编号迁移，不恢复中断的导入、不重新抽取或合并、不排队整理，检索向量照常按当前向量模型补齐（只找已有的内容）。排队中的整理执行时直接返回 `{"sealed": true}`；`build_profile` 对冻结的库抛 `MemorySealed`；录音库不再向冻结的分身写资料；承诺账本的整理（包括系统设置里的升级）被拒。`twin persona import|note|reextract|build` 和 `twin kernel rebuild --persona` 失败退出（“记忆已冻结，不能再改动”），`twin kernel rebuild --all` 跳过冻结的分身；`twin persona chat`、服务接口 `/v1/ask`、MCP 和渠道照常回答，同样不留痕。`twin kernel restore` 不受冻结限制。
+
 ## Identity 与用户建档
 
 - `identity`（代码层 1）是无 I/O 的冻结契约：`name: str`、`aliases: list[str]`、

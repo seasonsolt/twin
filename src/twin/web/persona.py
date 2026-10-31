@@ -1371,7 +1371,7 @@ def register(
                 return None
             if not preview and retirement.said(store, heir.heir_id):
                 raise HTTPException(403, retirement.RETIRED)
-        return retirement.farewell_reply(heir)
+            return retirement.farewell_reply(heir, store)
 
     def keep_farewell(store: PersonaStore, audience: Audience) -> None:
         if (heir_id := heir_of(audience)) is not None:

@@ -73,6 +73,7 @@ const FIELD_LABELS: Record<string, string> = {
   likeness: '形象',
   retire_on: '退场',
   farewell: '告别语',
+  farewell_words: '告别语',
   password: '口令',
 };
 

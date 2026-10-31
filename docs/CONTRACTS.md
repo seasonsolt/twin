@@ -72,6 +72,28 @@ Positioning: Identity → Memory upload → Service. Repository, project, Python
 - 说过以后：对话 403 `{"detail": "这段延续已经结束，以前的对话还能翻看"}`；`POST /api/conversations`、`PATCH` / `DELETE /api/conversations/{id}`
   同样 403；`GET` 照常。`GET /api/whoami` 的 `heir` 多 `gone: bool`（`heir_door.Session.gone`）。没有 `retire_on` 不退场。
 - 预演（`preview` + `heir`）一位过了日期的继承人：每次都回告别，`farewell: true`，不记任何东西。
+- 告别后附本人原话（P3.6）：`Heir.farewell_words` 是至多 2 个表达编号（`MAX_FAREWELL_WORDS`），默认空，旧遗嘱照读。新选的必须在
+  `companion.own_words` 里（本人自己说的、维度 2、3 的原话），否则 400“只能附你自己说过的话”；以前选的照留，重新整理后不在了的告别时略过。
+  告别语后空一行接 `LEFT_WORDS`“我说过的话，留给你：”和每句“原话”（日期）。`GET /api/persona/will/words` → `{words: [{id, quote, date}]}`，
+  至多 30 条，说得最多的在前，只给本人。
+
+## 节奏提醒（P3.6）
+
+- `persona/pace.py`（代码层 4）。`p_meta` 的 `pace` 是 `{kind: "off" | "daily_minutes" | "weekly_times", limit: 1–1440}`（默认 off、30），
+  `pace:quiet` 是本人选了“继续聊”的那天（本机日期）。用了多久不另记：从本人自己对话里 `role = 'user'` 的时间算，间隔不超过 30 分钟的连成一次，
+  一次的长度从第一句到最后一句再加 1 分钟；“今天”和“这周”（周一起）按本机时区，前一晚跨过零点的只算今天的部分。
+  每天：今天的分钟数 ≥ limit 时提醒；每周：这周的次数 > limit 时提醒；当天选过继续就不再提醒。
+- `GET /api/persona/pace` → `{pace, used: {minutes_today, times_week} | null, reminder: string | null}`（off 时 `used` 为 null）；
+  `PUT /api/persona/pace` 收 `pace`，返回同样的结构；`POST /api/persona/pace/go-on` 记下今天继续。只给本人，冻结后写入 423。
+
+## 告别一种陪伴（P3.6）
+
+- `persona/companion.py`（代码层 4）。`p_meta` 的 `reflections:closed` 是收起的用法（`mirror` / `free` / `dream` / `voice`）。
+  收尾的话固定，不调用模型：“{用法}就先到这里。”，有本人原话时接“你自己说过的话，留给你：”和至多 2 句（`own_words`：维度 2、3 条目里
+  本人自己说的最后一句引文，条目被说得多的在前、再按日期新的在前，一个表达只出现一次，每句至多 120 字）。回复 `mode: general`，不引用资料。
+- `GET /api/persona/reflections` → `{closed}`；`POST /api/persona/reflections/{way}/close` `{conversation_id?}` → `{reply, closed}`：
+  给了对话时依次存本人的“先到这里”和收尾的话（回复多 `reflection`），对话不存在 404，`ask` 等不能收起的 400；
+  `POST /api/persona/reflections/{way}/open` → `{closed}`。只给本人，冻结后写入 423。服务端不拒绝已收起用法的提问，收起只影响网页。
 
 ## 预演（P2.6）
 

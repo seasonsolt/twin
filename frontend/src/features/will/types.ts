@@ -12,6 +12,8 @@ export interface Heir {
   likeness: boolean;
   retire_on: string | null;
   farewell: string | null;
+  /** Up to two things the person said themself, said after the goodbye (ids of ``own_words``). */
+  farewell_words?: string[];
   created_at: string;
   updated_at: string;
 }
@@ -43,6 +45,7 @@ export interface HeirBody {
   likeness: boolean;
   retire_on: string | null;
   farewell: string | null;
+  farewell_words: string[];
   password?: string;
 }
 
@@ -66,3 +69,11 @@ export const MAX_TOPIC = 60;
 export const MAX_FAREWELL = 500;
 export const MIN_PASSWORD = 6;
 export const MAX_PASSWORD = 128;
+
+/** Something the person said themself, offered to leave with an heir after the goodbye. */
+export interface OwnWords {
+  id: string;
+  quote: string;
+  date: string | null;
+}
+export const MAX_FAREWELL_WORDS = 2;

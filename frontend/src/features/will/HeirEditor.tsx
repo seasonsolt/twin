@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { CircleHelp } from 'lucide-react';
 import {
   Button,
+  Checkbox,
   CheckGroup,
   Field,
   IconButton,
@@ -19,6 +20,7 @@ import {
 import {
   aspectOf,
   MAX_FAREWELL,
+  MAX_FAREWELL_WORDS,
   MAX_NAME,
   MAX_PASSWORD,
   MAX_TOPIC,
@@ -26,8 +28,10 @@ import {
   MIN_PASSWORD,
   type Heir,
   type HeirBody,
+  type OwnWords,
   type Taxonomy,
 } from './types';
+import { api } from '../../lib/api';
 
 const STEPS = ['称呼', '方面', '不谈', '声音影像', '退场', '口令'];
 const LAST = STEPS.length - 1;
@@ -42,6 +46,7 @@ interface Draft {
   likeness: boolean;
   retire_on: string;
   farewell: string;
+  farewell_words: string[];
   password: string;
   again: string;
 }
@@ -57,6 +62,7 @@ const draftOf = (heir: Heir | null): Draft => ({
   likeness: heir?.likeness ?? false,
   retire_on: heir?.retire_on ?? '',
   farewell: heir?.farewell ?? '',
+  farewell_words: heir?.farewell_words ?? [],
   password: '',
   again: '',
 });
@@ -108,9 +114,61 @@ function bodyOf(draft: Draft): HeirBody {
     likeness: draft.likeness,
     retire_on: draft.retire_on || null,
     farewell: farewell || null,
+    farewell_words: draft.farewell_words,
     // The word goes out only when the person sets it, and only in this request.
     ...(draft.password ? { password: draft.password } : {}),
   };
+}
+
+/** How many of the person's own words are listed to choose from, beside those already chosen. */
+const WORDS_SHOWN = 6;
+
+/** Up to two things the person said themself, to be said after the goodbye (P3.6). */
+function FarewellWords({
+  chosen,
+  onChange,
+}: {
+  chosen: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const [words, setWords] = useState<OwnWords[] | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    void api<{ words: OwnWords[] }>('/api/persona/will/words', {
+      signal: controller.signal,
+    })
+      .then((found) => setWords(found.words))
+      .catch(() => {
+        if (!controller.signal.aborted) setWords([]);
+      });
+    return () => controller.abort();
+  }, []);
+  if (!words?.length) return null;
+  const shown = words.filter(
+    (word, index) => index < WORDS_SHOWN || chosen.includes(word.id),
+  );
+  const full = chosen.length >= MAX_FAREWELL_WORDS;
+  return (
+    <Field id="heir-farewell-words" label="附上我说过的话">
+      <Stack gap={1}>
+        {shown.map((word) => (
+          <Checkbox
+            key={word.id}
+            label={`“${word.quote}”${word.date ? `（${word.date}）` : ''}`}
+            checked={chosen.includes(word.id)}
+            disabled={full && !chosen.includes(word.id)}
+            onChange={(event) =>
+              onChange(
+                event.currentTarget.checked
+                  ? [...chosen, word.id]
+                  : chosen.filter((id) => id !== word.id),
+              )
+            }
+          />
+        ))}
+      </Stack>
+    </Field>
+  );
 }
 
 /** The ten aspects, each opening to its facets. Ticking a whole aspect gives what it holds now and later. */
@@ -333,6 +391,10 @@ export function HeirEditor({
               onChange={(event) => set({ farewell: event.target.value })}
             />
           </Field>
+          <FarewellWords
+            chosen={draft.farewell_words}
+            onChange={(farewell_words) => set({ farewell_words })}
+          />
         </Stack>
       )}
       {step === 5 && (

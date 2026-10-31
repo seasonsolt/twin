@@ -19,6 +19,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from .companion import own_words
 from .dimensions import DIMENSIONS, FACET_BY_ID, FACETS
 from .store import PersonaStore
 
@@ -29,6 +30,7 @@ MAX_NAME_CHARS = 20
 MAX_TOPICS = 20
 MAX_TOPIC_CHARS = 60
 MAX_FAREWELL_CHARS = 500
+MAX_FAREWELL_WORDS = 2
 MAX_HEIRS = 20
 # scrypt at about 32 MiB and a few tens of milliseconds a try; the parameters are stored with each hash, so raising
 # them later leaves the words already set working.
@@ -57,6 +59,8 @@ class _HeirFields(BaseModel):
     retire_on: dt.date | None = None
     # The person's own words of goodbye, said instead of the default one (P2.8).
     farewell: str | None = None
+    # Up to two things the person said themself, said after the goodbye (P3.6): expression ids from ``own_words``.
+    farewell_words: list[str] = Field(default_factory=list)
 
 
 class HeirDraft(_HeirFields):
@@ -95,6 +99,14 @@ class HeirDraft(_HeirFields):
         if any(len(t) > MAX_TOPIC_CHARS for t in topics):
             raise ValueError(f"每条不谈的话题不能超过 {MAX_TOPIC_CHARS} 个字")
         return topics
+
+    @field_validator("farewell_words")
+    @classmethod
+    def _farewell_words(cls, value: list[str]) -> list[str]:
+        words = list(dict.fromkeys(value))
+        if len(words) > MAX_FAREWELL_WORDS:
+            raise ValueError(f"告别时最多附 {MAX_FAREWELL_WORDS} 句原话")
+        return words
 
     @field_validator("farewell")
     @classmethod
@@ -200,9 +212,18 @@ def _check_unique(store: PersonaStore, draft: HeirDraft, heir_id: str | None) ->
         raise ValueError(f"继承人最多 {MAX_HEIRS} 位")
 
 
+def _check_words(store: PersonaStore, draft: HeirDraft, before: Heir | None) -> None:
+    """Words newly chosen to be said after the goodbye must be the person's own (``companion.own_words``); those
+    chosen before stay, whatever was rebuilt since."""
+    new = [w for w in draft.farewell_words if before is None or w not in before.farewell_words]
+    if new and set(new) - {w.expression_id for w in own_words(store.list_items())}:
+        raise ValueError("只能附你自己说过的话")
+
+
 def add(store: PersonaStore, draft: HeirDraft, password: str, actor: str, now: dt.datetime) -> Heir:
     """Name a new heir with the word that will open the twin to them. ValueError when the draft or word will not do."""
     _check_unique(store, draft, None)
+    _check_words(store, draft, None)
     secret = hash_password(password)
     at = now.isoformat(timespec="seconds")
     heir = Heir(**draft.model_dump(), heir_id=f"heir_{uuid.uuid4().hex[:12]}", created_at=at, updated_at=at)
@@ -225,6 +246,7 @@ def update(
     ValueError when the draft or word will not do."""
     before = get(store, heir_id)
     _check_unique(store, draft, heir_id)
+    _check_words(store, draft, before)
     secret = None if password is None else hash_password(password)
     changes = [f for f in _HeirFields.model_fields if getattr(before, f) != getattr(draft, f)]
     if secret is not None:

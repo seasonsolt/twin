@@ -2323,6 +2323,7 @@ const handlers: Record<string, Handler> = {
   }),
   'GET /api/persona/state': reply({ stale: false }),
   'GET /api/persona/reflections': reply({ closed: [] }),
+  'GET /api/persona/will/words': reply({ words: [] }),
   'GET /api/persona/pace': reply({
     pace: { kind: 'off', limit: 30 },
     used: null,

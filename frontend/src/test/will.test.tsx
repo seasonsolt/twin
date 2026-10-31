@@ -104,6 +104,14 @@ beforeEach(() => {
             },
           ],
         });
+      if (url === '/api/persona/will/words')
+        return json({
+          words: [
+            { id: 'e1', quote: '钱的事先说清楚', date: '2024-03-02' },
+            { id: 'e2', quote: '大事睡一晚再定', date: null },
+            { id: 'e3', quote: '常回家看看', date: '2023-01-01' },
+          ],
+        });
       if (url === '/api/persona/coverage') return json(coverage);
       if (url === '/api/persona/chat/stream') return rehearsal();
       if (url === '/api/persona/will/heirs' && method === 'POST') {
@@ -269,7 +277,22 @@ it('names a new heir step by step, giving nothing unless ticked and sending the 
   ).toBePartiallyChecked();
   await next(user, 1);
   await user.type(within(editor).getByLabelText('不谈的话题'), '公司的事');
-  await next(user, 3);
+  await next(user, 2);
+  // Up to two things the person said themself, after the goodbye.
+  await user.click(
+    await within(editor).findByRole('checkbox', {
+      name: '“钱的事先说清楚”（2024-03-02）',
+    }),
+  );
+  await user.click(
+    within(editor).getByRole('checkbox', { name: '“大事睡一晚再定”' }),
+  );
+  expect(
+    within(editor).getByRole('checkbox', {
+      name: '“常回家看看”（2023-01-01）',
+    }),
+  ).toBeDisabled();
+  await next(user, 1);
   // The word, twice; differently is refused before anything is sent.
   const word = within(editor).getByLabelText('开启口令');
   expect(word).toHaveAttribute('type', 'password');
@@ -298,6 +321,7 @@ it('names a new heir step by step, giving nothing unless ticked and sending the 
         likeness: false,
         retire_on: null,
         farewell: null,
+        farewell_words: ['e1', 'e2'],
         password: 'sesame-1',
       },
     },

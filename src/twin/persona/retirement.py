@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import datetime as dt
 
+from .companion import own_words
 from .schema import ChatReply
 from .store import PersonaStore
 from .tiers import Audience, heir_of
@@ -20,6 +21,8 @@ DEFAULT_FAREWELL = "到这里，我们该说再见了。谢谢你一直来和我
 # Said to an heir who asks again after the goodbye; their conversations stay to read.
 RETIRED = "这段延续已经结束，以前的对话还能翻看"
 SAID_PREFIX = "heir_farewell:"
+# Said before the things the person chose to leave with an heir in their own words.
+LEFT_WORDS = "我说过的话，留给你："
 
 
 def leaving(store: PersonaStore, audience: Audience, today: dt.date) -> Heir | None:
@@ -46,11 +49,18 @@ def gone(store: PersonaStore, audience: Audience, today: dt.date) -> bool:
     return heir is not None and said(store, heir.heir_id)
 
 
-def farewell_reply(heir: Heir) -> ChatReply:
-    """The goodbye: the person's own words when they wrote some, else the default. Nothing was looked up, so it rests on
-    nothing and is not logged as a question asked."""
+def farewell_reply(heir: Heir, store: PersonaStore) -> ChatReply:
+    """The goodbye: the person's own words when they wrote some, else the default, and after it the things they said
+    themself that they chose (P3.6), as their memory quotes them now; one no longer there is left out. Nothing was
+    looked up, so it rests on nothing and is not logged as a question asked."""
+    text = heir.farewell or DEFAULT_FAREWELL
+    if heir.farewell_words:
+        quoted = {w.expression_id: w for w in own_words(store.list_items())}
+        lines = [quoted[w].line() for w in heir.farewell_words if w in quoted]
+        if lines:
+            text += "\n\n" + "\n".join([LEFT_WORDS, *(f"- {line}" for line in lines)])
     return ChatReply(
-        reply=heir.farewell or DEFAULT_FAREWELL,
+        reply=text,
         citations=[],
         confidence=1.0,
         abstain=False,

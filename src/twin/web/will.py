@@ -12,12 +12,14 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import Field
 
-from ..persona import lifecycle, will
+from ..persona import companion, lifecycle, will
 from ..persona.store import PersonaStore
 from .handoffs import person
 
 # Who changed the will, where the twin knows no account for its person (the persona edition on one's own machine).
 SELF_ACTOR = "self"
+# How many of the person's own words are offered to choose from for an heir's goodbye.
+WORDS_OFFERED = 30
 
 
 class HeirBody(will.HeirDraft):
@@ -43,6 +45,15 @@ def register(
             heirs = will.load(store)
             sealed = lifecycle.sealed(store)
         return {"heirs": [h.model_dump(mode="json") for h in heirs], "sealed": sealed}
+
+    @app.get("/api/persona/will/words")
+    def words(request: Request) -> dict[str, Any]:
+        """What the person can choose to leave with an heir after the goodbye: things they said themself of what they
+        value and how they decide, most said first."""
+        person(request)
+        with open_store() as store:
+            found = companion.own_words(store.list_items(), WORDS_OFFERED)
+        return {"words": [{"id": w.expression_id, "quote": w.quote, "date": w.date} for w in found]}
 
     @app.post("/api/persona/will/heirs")
     def add(body: HeirBody, request: Request) -> dict[str, Any]:

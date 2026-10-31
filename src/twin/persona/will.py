@@ -174,7 +174,12 @@ def hash_password(password: str) -> str:
 
 def verify(store: PersonaStore, heir_id: str, password: str) -> bool:
     """Whether ``password`` is the word that opens the twin to this heir, compared in constant time."""
-    stored = store.will_secret(heir_id)
+    return matches(store.will_secret(heir_id), password)
+
+
+def matches(stored: str | None, password: str) -> bool:
+    """Whether ``password`` is the word whose stored form (``hash_password``) is ``stored``, compared in constant
+    time; False for no stored form."""
     if stored is None or not password or len(password) > MAX_PASSWORD_CHARS:
         return False
     kept = json.loads(stored)

@@ -16,8 +16,10 @@ import {
 import { failing, useSystem } from '../../stores/system';
 import { rebuildHeld, useOpenSettings } from '../../features/settings/Settings';
 import { useKeepsWill, useOpenWill } from '../../features/will/Will';
+import { HeirDoor } from '../../features/heir/HeirDoor';
 import {
   AccountMenu,
+  Button,
   NavPill,
   SearchButton,
   StatusCard,
@@ -265,6 +267,7 @@ export function Sidebar() {
         ))}
       </nav>
       <div className="flex-1" />
+      {persona && <HeirEntry />}
       {background.length > 0 && (
         <StatusCard
           // Already there, it has nowhere to lead.
@@ -282,6 +285,19 @@ export function Sidebar() {
       )}
       <SidebarAccount />
     </aside>
+  );
+}
+
+/** 我是继承人: a quiet way in for an heir the will names, on the persona edition's side bar (P2.7). */
+function HeirEntry() {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Button variant="ghost" size="sm" onClick={() => setOpen(true)}>
+        我是继承人
+      </Button>
+      <HeirDoor open={open} onOpenChange={setOpen} />
+    </>
   );
 }
 

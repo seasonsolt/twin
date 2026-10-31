@@ -970,6 +970,35 @@ const myTeamAnswers = [
   },
 ];
 
+/** An heir's own conversation with the twin, once they opened it (P2.7); the twin speaks only from what the will
+ * gives them. */
+export const heirConversation = {
+  id: 'c-heir',
+  title: '小时候的事',
+  turns: [
+    {
+      id: 'h1',
+      role: 'user',
+      content: '你还记得我小时候学骑车的事吗？',
+      timestamp: '2026-10-17T01:30:00Z',
+    },
+    {
+      id: 'h2',
+      role: 'twin',
+      content:
+        '记得。那年夏天在小区后面的空地上，你摔了好几次也不肯回家，最后是自己骑到了路口。我常说你做事认准了就不撒手。',
+      timestamp: '2026-10-17T01:30:08Z',
+      reply: {
+        reply:
+          '记得。那年夏天在小区后面的空地上，你摔了好几次也不肯回家，最后是自己骑到了路口。我常说你做事认准了就不撒手。',
+        citations: [],
+        confidence: 0.7,
+      },
+    },
+  ],
+  audience: 'heir:heir_yu',
+};
+
 const history = [
   {
     id: 'c-plan',
@@ -2294,6 +2323,9 @@ const handlers: Record<string, Handler> = {
   'GET /api/conversations': reply(history),
   'GET /api/personas/conversations': reply(everyone(null)),
   'GET /api/conversations/c-plan': reply(conversation),
+  'GET /api/conversations/c-heir': reply(heirConversation),
+  // 我是继承人 (P2.7): the right name and word, the first time, before the seal is confirmed.
+  'POST /api/heir/open': reply({ status: 'confirm' }),
   'GET /api/conversations/c-handoff': reply(handoffConversation),
   'GET /api/conversations/c-team': reply(teamConversation),
   'GET /api/conversations/c-deleg': reply(delegationConversation),

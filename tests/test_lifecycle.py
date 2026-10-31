@@ -144,6 +144,9 @@ OPEN = {
     ("POST", "/api/media/export"),
     ("PUT", "/api/channels/wecom"),
     ("DELETE", "/api/channels/wecom"),
+    # An heir opens the sealed twin and leaves it (P2.7): sessions and the heirs' log, not the memory.
+    ("POST", "/api/heir/open"),
+    ("POST", "/api/heir/leave"),
 }
 
 

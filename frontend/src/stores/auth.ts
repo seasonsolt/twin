@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { api, beginApiSession } from '../lib/api';
 import { browser } from '../lib/base';
+import { adoptPersonaId, setHeirKeys } from '../lib/persona';
+import { clearPrefetch } from '../lib/personaPrefetch';
 import { usePersonas } from './personas';
 import { useWelcome } from './welcome';
 
@@ -22,7 +24,22 @@ export interface Identity {
   team_name?: string | null;
   /** Which product the server runs (``[product] edition``); missing (an older server) means the team's. */
   edition?: Edition;
+  /** An heir who opened the twin with their word (P2.7): this browser is theirs, to their own conversation alone. */
+  heir?: Heir | null;
 }
+
+/** The heir in this browser, as ``/api/whoami`` says. */
+export interface Heir {
+  id: string;
+  name: string;
+  /** The name the twin keeps for its person; none when they never gave one. */
+  person: string | null;
+  /** The twin they opened. */
+  persona: string;
+}
+
+/** The heir in this browser, if one is in. */
+export const useHeir = () => useAuth((state) => state.identity?.heir ?? null);
 
 /** 'persona': one person's own twin on their own machine, with chat and its memories only; 'team': everything. */
 export type Edition = 'persona' | 'team';
@@ -66,6 +83,7 @@ export const useAuth = create<{
   signedOut: boolean;
   login: (signal?: AbortSignal) => Promise<void>;
   logout: () => Promise<void>;
+  leave: () => Promise<void>;
   clear: () => void;
 }>((set, get) => ({
   identity: null,
@@ -74,6 +92,7 @@ export const useAuth = create<{
     ++version;
     beginApiSession();
     set({ identity: null });
+    setHeirKeys('');
     usePersonas.getState().reset();
     useWelcome.getState().reset();
   },
@@ -82,9 +101,28 @@ export const useAuth = create<{
     beginApiSession();
     const identity = await api<Identity>('/api/whoami', { signal });
     if (signal?.aborted || current !== version) return;
-    await usePersonas.getState().refresh();
+    if (identity.heir) {
+      // An heir reaches their twin alone and no list of twins.
+      clearPrefetch();
+      setHeirKeys(identity.heir.id);
+      adoptPersonaId(identity.heir.persona);
+      usePersonas.setState({
+        id: identity.heir.persona,
+        items: [],
+        pendingId: null,
+      });
+    } else {
+      setHeirKeys('');
+      await usePersonas.getState().refresh();
+    }
     if (!signal?.aborted && current === version)
       set({ identity, signedOut: false });
+  },
+  /** The heir leaves: their session ends on the server and this browser forgets it. */
+  async leave() {
+    await api('/api/heir/leave', { method: 'POST' });
+    get().clear();
+    await get().login();
   },
   async logout() {
     const current = version;

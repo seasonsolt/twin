@@ -553,6 +553,10 @@ HEIR_ALLOWED: tuple[tuple[str, str], ...] = (
     ("GET", "/api/conversations/{}"),
     ("PATCH", "/api/conversations/{}"),
     ("DELETE", "/api/conversations/{}"),
+    # Who is asking (the heir, not the person) and their way in and out (P2.7).
+    ("GET", "/api/whoami"),
+    ("POST", "/api/heir/open"),
+    ("POST", "/api/heir/leave"),
 )
 _HEIR_ALLOWED = [
     (method, re.compile("^" + re.escape(path).replace(re.escape("{}"), "[^/]+") + "$")) for method, path in HEIR_ALLOWED

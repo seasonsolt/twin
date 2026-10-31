@@ -1,6 +1,6 @@
 """Web side of the person's own assistant (``persona.assistant``): the notes they ask it to remember, what a colleague
-would get for a question (看同事会得到什么), and the promises they say they make. Everything here is for the person
-alone: a conversation of the colleague tier, a manager or a visitor is refused."""
+(看同事会得到什么) or an heir (预演) would get for a question, and the promises they say they make. Everything here is
+for the person alone: a conversation of the colleague tier, a manager or a visitor is refused."""
 
 from __future__ import annotations
 
@@ -15,15 +15,16 @@ from pydantic import BaseModel, ConfigDict
 from ..config import Settings
 from ..embed import Embedder, EmbedError
 from ..llm import LLM
+from ..persona import heirs
 from ..persona.assistant import DEFAULT_NOTE_TIER, NOTE_REPLY, NOTE_TITLE, SEALED_NOTE_REPLY
 from ..persona.chat import PersonaChat, PersonaContext
 from ..persona.dimensions import FACET_BY_ID
 from ..persona.schema import ChatReply
 from ..persona.sources import parse_note
 from ..persona.store import PersonaStore
-from ..persona.tiers import COLLEAGUE, SELF, Tier, item_tier
+from ..persona.tiers import COLLEAGUE, SELF, Audience, Tier
 
-# How many of the items kept from colleagues a trial question names.
+# How many of the items kept from a colleague or an heir a trial question names.
 WITHHELD_SHOWN = 3
 NoteTier = Literal["none", "colleague", "self"]
 
@@ -66,12 +67,13 @@ def note_reply(sealed: bool = False) -> ChatReply:
     )
 
 
-def withheld(store: PersonaStore, context: PersonaContext) -> list[dict[str, str]]:
-    """What the question's own retrieval found (the items it ranked and the core of the portrait) that is kept from
-    colleagues, to show what a trial question left out: the facet and the item, a few at most."""
-    tiers = store.item_tiers()
+def withheld(store: PersonaStore, context: PersonaContext, audience: Audience = COLLEAGUE) -> list[dict[str, str]]:
+    """What the question's own retrieval found (the items it ranked and the core of the portrait) that ``audience`` is
+    not given (a colleague, or an heir as the will stands, ``heirs.usable_items``), to show what a trial question left
+    out: the facet and the item, a few at most."""
     found = {i.item_id: i for i in [*(i for i, _ in context.items), *context.core]}
-    kept = [i for i in found.values() if item_tier(i, tiers) != COLLEAGUE]
+    given = {i.item_id for i in heirs.usable_items(store, found.values(), audience)}
+    kept = [i for i in found.values() if i.item_id not in given]
     return [
         {"id": i.item_id, "facet": FACET_BY_ID[i.facet_id].name, "text": i.statement[:60]}
         for i in kept[:WITHHELD_SHOWN]
@@ -79,13 +81,18 @@ def withheld(store: PersonaStore, context: PersonaContext) -> list[dict[str, str
 
 
 def trial_withheld(
-    store: PersonaStore, llm: LLM, embedder: Embedder, settings: Settings, question: str
+    store: PersonaStore,
+    llm: LLM,
+    embedder: Embedder,
+    settings: Settings,
+    question: str,
+    audience: Audience = COLLEAGUE,
 ) -> list[dict[str, str]]:
-    """The items a trial question would also have drawn on, had the person asked it themself, that a colleague does not
-    get (``withheld``); empty when retrieval cannot run now."""
+    """The items a trial question would also have drawn on, had the person asked it themself, that ``audience`` does
+    not get (``withheld``); empty when retrieval cannot run now."""
     own = PersonaChat(store, llm, embedder, settings, ledger=False, audience=SELF)
     try:
-        return withheld(store, own.retrieve(question))
+        return withheld(store, own.retrieve(question), audience)
     except (EmbedError, ValueError):
         return []
 

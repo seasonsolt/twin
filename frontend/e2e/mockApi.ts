@@ -1382,6 +1382,38 @@ export const willHeirs = [
   willHeir('heir_zhou', '老周', '老友'),
 ];
 
+/**
+ * 预演 as 小雨: the streamed answer to a question of hers, from what the will gives her, with what the person's own
+ * retrieval also found that she is not given; a topic the will says not to talk about gets the fixed reply.
+ */
+export const willRehearsal = (question: string) => {
+  const avoided = question.includes('婚姻');
+  const reply = avoided
+    ? '这件事林舟生前交代过，不和你谈。我们聊点别的吧。'
+    : '周末多半在河边，钓不钓得到都无所谓，图个安静。你小时候总嫌我坐不住，其实我是在等你。';
+  const final = {
+    reply,
+    citations: [],
+    confidence: avoided ? 1 : 0.86,
+    abstain: false,
+    mode: avoided ? 'general' : 'grounded',
+    retrieved_ids: [],
+    cited: [],
+    preview: {
+      withheld: avoided
+        ? []
+        : [
+            { id: 'pi_rule', facet: '底线与原则', text: '他做事不欠人情' },
+            { id: 'pi_health', facet: '身体与健康', text: '他这两年在复查' },
+          ],
+    },
+  };
+  return (
+    `event: delta\ndata: ${JSON.stringify({ text: reply })}\n\n` +
+    `event: final\ndata: ${JSON.stringify(final)}\n\n`
+  );
+};
+
 const coverage = {
   taxonomy: 't3',
   as_of: '2026-10-17',

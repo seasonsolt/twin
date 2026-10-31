@@ -455,7 +455,14 @@ it("rehearses an heir's conversation as the heir, naming what each answer left o
   ).toEqual(['修改', '预演', '删除']);
   await user.click(within(dialog).getByRole('button', { name: '预演' }));
   const panel = await screen.findByRole('dialog', { name: '预演 · 小雨' });
-  expect(within(panel).getByText(/以小雨的身份问几个问题/)).toBeVisible();
+  // It looks as it would to the heir: whose memory this carries on, and that it is not them.
+  expect(
+    within(panel).getByRole('heading', { name: '林舟的记忆延续' }),
+  ).toBeVisible();
+  expect(within(panel).getByText('不是林舟本人')).toBeVisible();
+  expect(
+    within(panel).getByText('小雨，想问林舟什么，就在下面写。'),
+  ).toBeVisible();
   const input = within(panel).getByLabelText('以小雨的身份问');
   await user.type(input, '小时候我们常做什么？{Enter}');
   const answer = await within(panel).findByRole('article', {

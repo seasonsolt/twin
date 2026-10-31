@@ -1,18 +1,18 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import {
   Badge,
   Button,
-  ChatInput,
   ChatMessage,
-  ChatSurface,
   Notice,
   Row,
   Stack,
-  Text,
 } from '../../components/ui';
 import { api } from '../../lib/api';
 import { readSSE } from '../../lib/sse';
+import { usePersonas } from '../../stores/personas';
+import { useStatus } from '../../stores/status';
 import { MessageText } from '../chat/MessageText';
+import { HeirComposer, HeirGreeting, HeirHeading } from '../heir/HeirChat';
 import type { ChatReply, Withheld } from '../chat/types';
 import type { Heir } from './types';
 
@@ -49,10 +49,17 @@ export function HeirPreview({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const request = useRef<AbortController | null>(null);
+  // Who the heir would be told this memory carries on, as on their own page.
+  const status = useStatus((state) => state.data);
+  const persona = usePersonas((state) =>
+    state.items.find((item) => item.id === state.id),
+  );
+  const person = status?.target_name || persona?.name || 'TA';
 
   useEffect(() => () => request.current?.abort(), []);
 
-  const ask = async () => {
+  const ask = async (event?: FormEvent) => {
+    event?.preventDefault();
     const text = draft.trim();
     if (!text || busy) return;
     const controller = new AbortController();
@@ -114,6 +121,7 @@ export function HeirPreview({
 
   return (
     <Stack gap={4}>
+      <HeirHeading person={person} nested />
       {turns.length ? (
         <Stack gap={4} role="log" aria-label="预演">
           {turns.map((turn, index) => (
@@ -142,43 +150,21 @@ export function HeirPreview({
           ))}
         </Stack>
       ) : (
-        <Text tone="secondary">
-          以{heir.name}的身份问几个问题，什么都不留。
-        </Text>
+        <HeirGreeting heir={heir.name} person={person} />
       )}
       {error && (
         <Notice tone="danger" role="alert">
           {error}
         </Notice>
       )}
-      <ChatSurface variant="composer">
-        <ChatInput
-          aria-label={`以${heir.name}的身份问`}
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (
-              event.key === 'Enter' &&
-              !event.shiftKey &&
-              !event.nativeEvent.isComposing
-            ) {
-              event.preventDefault();
-              void ask();
-            }
-          }}
-        />
-        <Row justify="end">
-          <Button
-            variant="primary"
-            size="sm"
-            loading={busy}
-            disabled={!draft.trim()}
-            onClick={() => void ask()}
-          >
-            发送
-          </Button>
-        </Row>
-      </ChatSurface>
+      <HeirComposer
+        person={person}
+        label={`以${heir.name}的身份问`}
+        value={draft}
+        onChange={setDraft}
+        onSend={(event) => void ask(event)}
+        busy={busy}
+      />
       <Row justify="between">
         <Button variant="ghost" onClick={onBack}>
           返回

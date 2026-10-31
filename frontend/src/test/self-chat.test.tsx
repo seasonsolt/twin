@@ -1280,10 +1280,49 @@ it('opens a new conversation with the person as they were in a year chosen on th
     '你在忙什么',
   );
   await person.click(screen.getByRole('button', { name: '发送' }));
-  await screen.findByText('那年我刚辞职。');
+  const said = (await screen.findByText('那年我刚辞职。')).closest('article')!;
+  // 和过去的自己说话 (P3.5): said once, above the answer, who is answering.
+  expect(
+    within(said).getByText('这是 2018 年的你，只知道那年以前的事'),
+  ).toBeVisible();
   expect(bodyOf('/api/persona/chat/stream')[0]).toMatchObject({
     as_of: '2018-12-31',
     messages: [{ role: 'user', content: '你在忙什么' }],
+  });
+});
+
+it('lets the person use the ways of looking at themself with the self of a past year', async () => {
+  const person = userEvent.setup();
+  knownSince(2015);
+  streamed.push(
+    answer({
+      reply: '你说过：“先说清楚”（2017-05-01）。你会怎么选？',
+      as_of: '2018-12-31',
+      reflection: 'voice',
+    }),
+  );
+  mount(
+    personas,
+    { pathname: '/chat', state: { asOfYear: 2018 } },
+    { work: false },
+    'persona',
+  );
+  await list();
+  const year = await screen.findByRole('combobox', {
+    name: '和哪一年的自己聊',
+  });
+  await waitFor(() => expect(year).toHaveValue('2018'));
+  const ways = screen.getByRole('radiogroup', { name: '这一轮' });
+  await person.click(within(ways).getByRole('radio', { name: '内在声音' }));
+  await person.type(screen.getByRole('textbox', { name: '你说' }), '纠结');
+  await person.click(screen.getByRole('button', { name: '发送' }));
+  const said = (await screen.findByText(/你会怎么选？/)).closest('article')!;
+  expect(
+    within(said).getByText('这是 2018 年的你，只知道那年以前的事'),
+  ).toBeVisible();
+  expect(bodyOf('/api/persona/chat/stream')[0]).toMatchObject({
+    as_of: '2018-12-31',
+    reflection: 'voice',
   });
 });
 

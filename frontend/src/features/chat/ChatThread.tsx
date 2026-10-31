@@ -465,6 +465,14 @@ export function ChatThread({
                               </Text>
                             )
                           )}
+                          {assistant &&
+                            turn.reply?.as_of &&
+                            !turn.reply.crisis && (
+                              <Text size="xs" tone="secondary">
+                                这是 {turn.reply.as_of.slice(0, 4)}{' '}
+                                年的你，只知道那年以前的事
+                              </Text>
+                            )}
                           {turn.reply?.team_answers?.map((card) => (
                             <TeamAnswerCard
                               key={card.id}

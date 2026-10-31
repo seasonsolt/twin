@@ -4,6 +4,7 @@ decide and in their own words, never telling them what to do, and leaving nothin
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 from pathlib import Path
 from typing import Any
 
@@ -87,6 +88,24 @@ def test_it_looks_only_in_what_the_person_values_and_how_they_decide(path: Path)
     # Their own words are still there to be said back, whatever they were about.
     assert "钓鱼" in user
     assert reply.citations == ["pi_money"] and "你说过" in reply.reply
+
+
+def test_the_self_of_a_past_day_is_heard_with_only_what_they_had_said_by_then(path: Path) -> None:
+    """和过去的自己说话 (P3.5): the inner voice of 2026-09-01 knows the money principle said that day, not the night
+    one said the day after, and is told it is the person of that year."""
+    llm = Voice("你说过：“钱的事先说清楚再谈感情”。你会怎么选？")
+    with PersonaStore(path) as store:
+        reply = chat(store, llm).reply([ChatTurn(role="user", content=QUESTION)], as_of=dt.date(2026, 9, 1))
+    [(_, system, user)] = drafts(llm)
+    assert "## 这一轮：内在声音" in system and "这一轮你是 2026 年的他" in system
+    assert "pi_money" in reply.retrieved_ids and "pi_night" not in reply.retrieved_ids
+    assert "睡一晚" not in user
+    # Asked without a year, it is the person as they are now, with nothing said of a year.
+    llm = Voice("你说过：“钱的事先说清楚再谈感情”。你会怎么选？")
+    with PersonaStore(path) as store:
+        chat(store, llm).reply([ChatTurn(role="user", content=QUESTION)])
+    [(_, system, _)] = drafts(llm)
+    assert "年的他" not in system
 
 
 @pytest.mark.parametrize(

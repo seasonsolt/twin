@@ -1,7 +1,9 @@
 """Ways the person can talk with their own twin about themself, besides asking it things (docs/PRODUCT_PERSONA_AGENT.md
 P1.4, P3.2): 照镜子 (look at a memory or a question with their own words held up to it), 随便说 (say whatever comes, the
 twin saying little), 记梦 (tell a dream and be asked what each part of it calls up) and 内在声音 (say what one is torn
-about and hear back the principles and warnings one said oneself, the choice left to oneself).
+about and hear back the principles and warnings one said oneself, the choice left to oneself). Each can be used with
+the self of a past year (时间切片, P3.5): then the twin is the person as of that year, quoting only what they had
+said by then (``SLICED_SECTION``; what it is given is already only that, ``PersonaChat._search``).
 
 The twin reflects, quotes and asks; it does not diagnose, judge or tell the person what to do. Each way is a section
 added to the person's assistant (``persona.assistant``), so the answer's format and every check after it stay as they
@@ -76,6 +78,18 @@ REFLECTION_SECTIONS: dict[Reflection, str] = {
 “你说过的话里，我没找到和这件事相关的原则”，不自己补，mode 设为 abstain，citations 为空。"""
     + _COMMON,
 }
+
+# Added when the person looks at themself as of a past year (时间切片, P3.5): the twin is them as they were then.
+SLICED_SECTION = """
+这一轮你是 {year} 年的他：只引用 {year} 年和那以前他说过、做过的原话，不提那以后的事，不说你知道后来会怎样；\
+资料里没有那时的相关原话时直说那时还没说过。"""
+
+
+def reflection_section(reflection: Reflection, year: int | None) -> str:
+    """The prompt section of ``reflection``, as the person of ``year`` when they chose to talk with that year's self."""
+    section = REFLECTION_SECTIONS[reflection]
+    return section + SLICED_SECTION.format(year=year) if section and year is not None else section
+
 
 # Telling the person what to do, in their own language or English; their own words in quotation marks are not counted.
 COMMAND_PATTERNS = (

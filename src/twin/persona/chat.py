@@ -49,7 +49,7 @@ from .ledger import KIND_LABELS, SELF, STATUS_LABELS, for_chat
 from .lexical import BM25, cached, tokenize
 from .locate import locate, needs_locating
 from .quotes import remove_unverified_quotes
-from .reflection import REFLECTION_SECTIONS, VOICE_DIMENSIONS, VOICE_REWRITE, Reflection, commands, voice_fallback
+from .reflection import VOICE_DIMENSIONS, VOICE_REWRITE, Reflection, commands, reflection_section, voice_fallback
 from .rewrite import Rewrite, rewrite
 from .schema import (
     MAX_TOPIC_FACETS,
@@ -1940,7 +1940,7 @@ def chat_system_prompt(name: str, ctx: PersonaContext) -> str:
             + (ASSISTANT_MEETING_SECTION if ctx.meeting_record else "")
             + team
             + _attachment_section(ctx)
-            + REFLECTION_SECTIONS[ctx.reflection]
+            + reflection_section(ctx.reflection, ctx.as_of.year if ctx.as_of else None)
         )
     if ctx.meeting_record:
         prompt += MEETING_RECORD_SECTION

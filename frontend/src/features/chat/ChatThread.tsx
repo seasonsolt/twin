@@ -57,6 +57,7 @@ import {
   type SelfRating,
   type Turn,
 } from './types';
+import { usePace } from './usePace';
 import type { Playback } from './usePlayback';
 
 const CHAT_ATTACHMENT_ACCEPT =
@@ -178,6 +179,8 @@ export function ChatThread({
   const identity = useIdentity(active);
   const { audio, video, capabilities, toggleReply, speaking, speakable } =
     playback;
+  // Only the person's own conversation in the persona edition keeps their pace.
+  const pace = usePace(assistant && look === 'sutai', chat.busy);
   const status = useStatus((state) => state.data);
   const { end, composer, composerHeight } = layout;
   const attachmentInput = useRef<HTMLInputElement>(null);
@@ -717,6 +720,17 @@ export function ChatThread({
                   </div>
                 )}
               </div>
+              {pace.reminder && (
+                <Notice
+                  actions={
+                    <Button variant="secondary" size="sm" onClick={pace.goOn}>
+                      继续聊
+                    </Button>
+                  }
+                >
+                  <p>{pace.reminder}</p>
+                </Notice>
+              )}
               {chat.error && (
                 <Notice
                   tone="danger"

@@ -717,6 +717,9 @@ def register(
     from . import self_ratings as self_rating_routes
 
     self_rating_routes.register(app, ingestion.lock, open_store)
+    from . import pace as pace_routes
+
+    pace_routes.register(app, ingestion.lock, open_store)
     from . import will as will_routes
 
     will_routes.register(app, ingestion.lock, open_store)

@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router';
 import {
   Activity,
   Brain,
+  Gauge,
   HardDrive,
   KeyRound,
   LayoutGrid,
@@ -48,6 +49,7 @@ import {
   type SystemSection,
 } from '../admin/SystemPanes';
 import { LibraryRules, MemoryPane } from '../admin/Upgrades';
+import { Pace } from './Pace';
 
 /** The search parameter that holds the open section: the dialog sits over any page and closing it returns there. */
 export const SETTINGS_PARAM = 'settings';
@@ -63,6 +65,7 @@ const MOVED: Record<string, SectionKey> = {
 type SectionKey =
   | 'look'
   | 'account'
+  | 'pace'
   | 'channels'
   | 'aliases'
   | 'egress'
@@ -196,6 +199,10 @@ export function Settings() {
   const listed: Section[] = [
     { key: 'look', label: '外观', group: '我', icon: Palette },
     { key: 'account', label: '账号', icon: UserRound },
+    // 节奏提醒 (P3.6): the person's own pace with their own twin, in the persona edition.
+    ...(persona && ownsTwin
+      ? ([{ key: 'pace', label: '节奏', icon: Gauge }] satisfies Section[])
+      : []),
     ...(ownsTwin
       ? ([
           {
@@ -291,9 +298,14 @@ export function Settings() {
       { replace: true },
     );
   const monitored = ['status', 'gpu', 'embed', 'asr', 'tts'].includes(active);
-  const system = !['look', 'account', 'channels', 'aliases', 'egress'].includes(
-    active,
-  );
+  const system = ![
+    'look',
+    'account',
+    'pace',
+    'channels',
+    'aliases',
+    'egress',
+  ].includes(active);
   return (
     <SettingsDialog
       open={open}
@@ -326,6 +338,8 @@ export function Settings() {
         <Look />
       ) : active === 'account' ? (
         <Account />
+      ) : active === 'pace' ? (
+        <Pace />
       ) : active === 'channels' ? (
         <Channels />
       ) : active === 'aliases' ? (

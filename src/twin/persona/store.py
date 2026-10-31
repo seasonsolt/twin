@@ -1774,6 +1774,16 @@ class PersonaStore:
             out += [(r[0], int(r[1]), json.loads(r[2])) for r in rows]
         return out
 
+    def owner_messages_since(self, owner: str | None, since: dt.datetime) -> list[str]:
+        """When ``owner`` wrote in their conversations since ``since`` (UTC), oldest first (``pace``)."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT t.created_at FROM conversation_turns t JOIN conversations c ON c.id = t.conversation_id "
+                "WHERE c.owner IS ? AND t.role = 'user' AND t.created_at >= ? ORDER BY t.created_at",
+                (owner, since.isoformat()),
+            ).fetchall()
+        return [r[0] for r in rows]
+
     def append_conversation_turn(
         self,
         conversation_id: str,

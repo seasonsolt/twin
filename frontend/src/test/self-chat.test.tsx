@@ -1291,6 +1291,38 @@ it('opens a new conversation with the person as they were in a year chosen on th
   });
 });
 
+it('says once above the person’s own conversation that their pace is reached, and lets them go on', async () => {
+  const person = userEvent.setup();
+  let reminder: string | null = '今天聊了挺久了，要不要先停一停？';
+  const answering = fetcher.getMockImplementation() as (
+    url: string,
+    init?: RequestInit,
+  ) => Promise<Response>;
+  fetcher.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (url === '/api/persona/pace/go-on') reminder = null;
+    return url.startsWith('/api/persona/pace')
+      ? json({
+          pace: { kind: 'daily_minutes', limit: 30 },
+          used: null,
+          reminder,
+        })
+      : answering(url, init);
+  });
+  mount(personas, '/chat', { work: false }, 'persona');
+  await list();
+  const line = await screen.findByText('今天聊了挺久了，要不要先停一停？');
+  await person.click(screen.getByRole('button', { name: '继续聊' }));
+  expect(line).not.toBeInTheDocument();
+  expect(
+    fetcher.mock.calls.some(([url]) => url === '/api/persona/pace/go-on'),
+  ).toBe(true);
+  // An answer later, it stays away: the day's word was to go on.
+  await person.type(screen.getByRole('textbox', { name: '你说' }), '再聊聊');
+  await person.click(screen.getByRole('button', { name: '发送' }));
+  await screen.findByText('好的。');
+  expect(screen.queryByText('今天聊了挺久了，要不要先停一停？')).toBeNull();
+});
+
 it('lets the person use the ways of looking at themself with the self of a past year', async () => {
   const person = userEvent.setup();
   knownSince(2015);

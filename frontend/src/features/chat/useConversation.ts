@@ -567,6 +567,37 @@ export function useConversation(active: boolean) {
       rows.map((turn) => (turn.id === turnId ? { ...turn, handoff } : turn)),
     );
   };
+  /** 告别一种陪伴 (P3.6): the person says "先到这里" to a way of looking at themself; the twin's closing words follow it in
+   * the conversation (kept there once it is saved). Resolves to the ways now put away. */
+  const closeReflection = async (reflection: Reflection) => {
+    const { reply, closed } = await api<{
+      reply: ChatReply;
+      closed: Reflection[];
+    }>(`/api/persona/reflections/${reflection}/close`, {
+      method: 'POST',
+      json: { conversation_id: id.current },
+      headers: headers(),
+    });
+    if (!mounted.current || personaId !== getPersonaId()) return closed;
+    const now = new Date().toISOString();
+    setTurns((rows) => [
+      ...rows,
+      {
+        id: crypto.randomUUID(),
+        role: 'user',
+        content: '先到这里',
+        timestamp: now,
+      },
+      {
+        id: crypto.randomUUID(),
+        role: 'twin',
+        content: reply.reply,
+        timestamp: now,
+        reply,
+      },
+    ]);
+    return closed;
+  };
   /** Take back a promise the assistant wrote into the commitments from what the person said. */
   const undoPromise = async (turnId: string) => {
     const promise = turns.find((turn) => turn.id === turnId)?.reply?.commitment;
@@ -613,6 +644,7 @@ export function useConversation(active: boolean) {
     conversationTitle,
     setNoteTier,
     rateReply,
+    closeReflection,
     undoPromise,
     askLensOwner,
     draft,

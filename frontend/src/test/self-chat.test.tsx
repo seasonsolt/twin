@@ -1323,6 +1323,50 @@ it('says once above the person’s own conversation that their pace is reached, 
   expect(screen.queryByText('今天聊了挺久了，要不要先停一停？')).toBeNull();
 });
 
+it('lets the person put a way of looking at themself away with closing words, and open it again from the menu', async () => {
+  const person = userEvent.setup();
+  let closed: string[] = [];
+  const answering = fetcher.getMockImplementation() as (
+    url: string,
+    init?: RequestInit,
+  ) => Promise<Response>;
+  fetcher.mockImplementation(async (url: string, init?: RequestInit) => {
+    const way = /^\/api\/persona\/reflections\/(\w+)\/(close|open)$/.exec(url);
+    if (way) {
+      closed =
+        way[2] === 'close'
+          ? [...closed, way[1]]
+          : closed.filter((r) => r !== way[1]);
+      return json({
+        closed,
+        reply: answer({
+          reply: '内在声音就先到这里。\n- “先说清楚”（2024-03-02）',
+          mode: 'general',
+          reflection: 'voice',
+        }),
+      });
+    }
+    if (url === '/api/persona/reflections') return json({ closed });
+    return answering(url, init);
+  });
+  mount(personas, '/chat', { work: false }, 'persona');
+  await list();
+  await screen.findByText('仅你可见');
+  const ways = screen.getByRole('radiogroup', { name: '这一轮' });
+  expect(screen.queryByRole('button', { name: '先到这里' })).toBeNull();
+  await person.click(within(ways).getByRole('radio', { name: '内在声音' }));
+  await person.click(screen.getByRole('button', { name: '先到这里' }));
+  expect(await screen.findByText(/内在声音就先到这里/)).toBeVisible();
+  expect(screen.getByText('先到这里')).toBeVisible();
+  expect(within(ways).queryByRole('radio', { name: '内在声音' })).toBeNull();
+  expect(within(ways).getByRole('radio', { name: '问答' })).toBeChecked();
+  await person.click(screen.getByLabelText('更多：语音、形象'));
+  await person.click(screen.getByRole('button', { name: '打开内在声音' }));
+  await waitFor(() =>
+    expect(within(ways).getByRole('radio', { name: '内在声音' })).toBeChecked(),
+  );
+});
+
 it('lets the person use the ways of looking at themself with the self of a past year', async () => {
   const person = userEvent.setup();
   knownSince(2015);

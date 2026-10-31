@@ -2322,6 +2322,7 @@ const handlers: Record<string, Handler> = {
     consent_texts: { portrait: '', voice: '' },
   }),
   'GET /api/persona/state': reply({ stale: false }),
+  'GET /api/persona/reflections': reply({ closed: [] }),
   'GET /api/persona/pace': reply({
     pace: { kind: 'off', limit: 30 },
     used: null,

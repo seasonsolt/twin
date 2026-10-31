@@ -720,6 +720,9 @@ def register(
     from . import pace as pace_routes
 
     pace_routes.register(app, ingestion.lock, open_store)
+    from . import companion as companion_routes
+
+    companion_routes.register(app, ingestion.lock, open_store)
     from . import will as will_routes
 
     will_routes.register(app, ingestion.lock, open_store)

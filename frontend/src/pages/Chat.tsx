@@ -5,6 +5,7 @@ import {
   ActionMenu,
   AvatarFrame,
   Badge,
+  Button,
   ChatSurface,
   Heading,
   IconButton,
@@ -13,6 +14,7 @@ import {
   Select,
   Text,
   TextLink,
+  toast,
   useConfirm,
 } from '../components/ui';
 import { ChatStage } from '../features/chat/ChatStage';
@@ -125,6 +127,37 @@ export function Chat() {
     !!persona?.mine && !!persona.approved && chat.audience !== 'colleague';
   const [trialOn, setTrialOn] = usePersonaState(false);
   const [reflection, setReflection] = usePersonaState<Reflection>('ask');
+  // 告别一种陪伴 (P3.6): the ways of looking at themself the person put away, opened again from "⋯".
+  const [closed, setClosed] = usePersonaState<Reflection[]>([]);
+  const personaEdition = usePersonaEdition();
+  const keepsWays = assistant && personaEdition;
+  useEffect(() => {
+    if (!keepsWays) return;
+    const controller = new AbortController();
+    void api<{ closed: Reflection[] }>('/api/persona/reflections', {
+      signal: controller.signal,
+    })
+      .then((ways) => setClosed(Array.isArray(ways.closed) ? ways.closed : []))
+      .catch(() => {});
+    return () => controller.abort();
+  }, [keepsWays, setClosed]);
+  const putAway = (way: Reflection) => {
+    setReflection('ask');
+    void chat
+      .closeReflection(way)
+      .then(setClosed)
+      .catch(() => toast('没能收起，请重试', 'danger'));
+  };
+  const openAgain = (way: Reflection) => {
+    void api<{ closed: Reflection[] }>(`/api/persona/reflections/${way}/open`, {
+      method: 'POST',
+    })
+      .then((ways) => {
+        setClosed(ways.closed);
+        setReflection(way);
+      })
+      .catch(() => toast('没能打开，请重试', 'danger'));
+  };
   const placed = useRef<string | null>(null);
   const clearChat = chat.clear;
   useEffect(() => {
@@ -161,7 +194,6 @@ export function Chat() {
       });
     return () => controller.abort();
   }, [active, assistant, personaId]);
-  const personaEdition = usePersonaEdition();
   // The persona edition's chat wears 素体: the twin's core over the conversation, its words in the voice face.
   const look = personaEdition ? 'sutai' : undefined;
   const [scope, setScope] = useState<Scope>({ kind: 'all' });
@@ -570,12 +602,24 @@ export function Chat() {
       onChange={setMode}
     />
   ) : assistant ? (
-    <Segmented
-      label="这一轮"
-      value={reflection}
-      options={REFLECTIONS}
-      onChange={setReflection}
-    />
+    <>
+      <Segmented
+        label="这一轮"
+        value={reflection}
+        options={REFLECTIONS.filter((r) => !closed.includes(r.id))}
+        onChange={setReflection}
+      />
+      {keepsWays && reflection !== 'ask' && (
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={chat.busy}
+          onClick={() => putAway(reflection)}
+        >
+          先到这里
+        </Button>
+      )}
+    </>
   ) : undefined;
   const year = chat.asOf ? Number(chat.asOf.slice(0, 4)) : null;
   const years = lookBackYears(since, year, new Date().getFullYear());
@@ -618,6 +662,12 @@ export function Chat() {
             label: stageOpen ? '收起形象' : '形象',
             onSelect: () => setStageOpen(!stageOpen),
           },
+          ...(keepsWays && !workOn
+            ? REFLECTIONS.filter((r) => closed.includes(r.id)).map((r) => ({
+                label: `打开${r.label}`,
+                onSelect: () => openAgain(r.id),
+              }))
+            : []),
         ]}
       />
     ) : null;

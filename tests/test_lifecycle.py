@@ -97,6 +97,9 @@ SEALED = {
     # 节奏提醒
     ("PUT", "/api/persona/pace"),
     ("POST", "/api/persona/pace/go-on"),
+    # 告别一种陪伴
+    ("POST", "/api/persona/reflections/{reflection}/close"),
+    ("POST", "/api/persona/reflections/{reflection}/open"),
     # 承诺账本
     ("POST", "/api/persona/ledger/build"),
     ("POST", "/api/persona/ledger/{entry_id}/review"),

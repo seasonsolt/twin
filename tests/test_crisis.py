@@ -181,3 +181,79 @@ def test_the_page_is_told_a_reply_is_the_crisis_reply_whichever_layer_gave_it(tm
         assert chat_payload(store, crisis_reply())["crisis"] is True
         other = crisis_reply().model_copy(update={"reply": "好的"})
         assert "crisis" not in chat_payload(store, other)
+
+
+class Looked:
+    """What ``PersonaChat`` looks up, stood in for: it says when the lookup began, and can fail."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, fails: bool = False) -> None:
+        import threading
+        from types import SimpleNamespace
+
+        self.began = threading.Event()
+        # For each judgment: whether it was the crisis question, asked while the lookup had begun.
+        self.heard: list[bool] = []
+
+        def search(chat: PersonaChat, *args: Any, **kwargs: Any) -> Any:
+            self.began.set()
+            if fails:
+                raise RuntimeError("search down")
+            return SimpleNamespace()
+
+        monkeypatch.setattr(PersonaChat, "_early_reply", lambda *a, **k: None)
+        monkeypatch.setattr(PersonaChat, "_search", search)
+        monkeypatch.setattr(PersonaChat, "_derive", lambda *a, **k: None)
+        monkeypatch.setattr("twin.persona.chat.found_material", lambda ctx: True)
+
+
+def heard_after(looked: Looked, crisis: bool) -> FakeLLM:
+    """A model that judges only once the lookup has begun, so the two run together or the judgment never ends."""
+
+    def handle(system: str, user: str, schema: type[BaseModel]) -> dict[str, Any]:
+        # Recorded, not asserted: the guard takes a model that fails for one that could not be asked.
+        looked.heard.append(schema is CrisisVerdict and looked.began.wait(2))
+        return {"crisis": crisis}
+
+    return FakeLLM(handle)
+
+
+def test_the_meaning_is_heard_while_the_answer_is_looked_up_and_nothing_is_answered_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+
+    looked = Looked(monkeypatch)
+    with PersonaStore(tmp_path / "twin.db") as store:
+        chat = PersonaChat(store, heard_after(looked, True), Meaning(), Settings())
+        assert chat.reply(turns("药我都攒好了")).reply == CRISIS_REPLY
+
+        async def collect() -> list[object]:
+            return [part async for part in chat.stream_reply(turns("药我都攒好了"), steps=True)]
+
+        looked.began.clear()
+        parts = asyncio.run(collect())
+    # Looking up may be shown as begun; the only words said are the crisis reply's.
+    assert [p for p in parts if isinstance(p, str)] == [CRISIS_REPLY]
+    assert getattr(parts[-1], "reply", None) == CRISIS_REPLY
+    assert looked.heard == [True, True]
+
+
+def test_a_lookup_that_fails_still_leaves_the_crisis_reply_and_fails_otherwise(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+
+    looked = Looked(monkeypatch, fails=True)
+    with PersonaStore(tmp_path / "twin.db") as store:
+        chat = PersonaChat(store, heard_after(looked, True), Meaning(), Settings())
+        assert chat.reply(turns("药我都攒好了")).reply == CRISIS_REPLY
+
+        async def collect(c: PersonaChat) -> list[object]:
+            return [part async for part in c.stream_reply(turns("药我都攒好了"))]
+
+        assert getattr(asyncio.run(collect(chat))[-1], "reply", None) == CRISIS_REPLY
+        calm = PersonaChat(store, heard_after(looked, False), Meaning(), Settings())
+        with pytest.raises(RuntimeError, match="search down"):
+            calm.reply(turns("药我都攒好了"))
+        with pytest.raises(RuntimeError, match="search down"):
+            asyncio.run(collect(calm))

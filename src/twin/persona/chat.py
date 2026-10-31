@@ -20,7 +20,7 @@ import threading
 from collections import OrderedDict
 from collections.abc import AsyncGenerator, Callable, Hashable, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import aclosing
+from contextlib import aclosing, suppress
 from contextvars import copy_context
 from dataclasses import dataclass, field, replace
 from functools import partial
@@ -40,7 +40,7 @@ from . import gate, lifecycle
 from .assistant import ASSISTANT_MEETING_SECTION, ASSISTANT_STREAM_FORMAT, ASSISTANT_SYSTEM
 from .attachments import AttachmentPassage
 from .connect import connect
-from .crisis import CrisisGuard, crisis_reply
+from .crisis import CrisisGuard, crisis_reply, in_crisis
 from .derive import derive, needs_derivation
 from .dimensions import DIMENSIONS, FACET_BY_ID, FACETS
 from .heirs import avoided, avoided_reply, close_to, embed_topics, grant, item_words, mentions
@@ -1161,20 +1161,29 @@ class PersonaChat:
         then, it says so and asks no model."""
         if not messages or messages[-1].role != "user":
             raise ValueError("the last message must be the user's")
-        if CrisisGuard(self.embedder, self.llm).check(messages) is not None:
+        if in_crisis(messages[-1].content):
             return crisis_reply()
-        if (refused := self._avoided_reply(messages)) is not None:
-            return refused
-        if persist and (unbuilt := self._unbuilt_reply(as_of)) is not None:
-            return unbuilt
-        if sliced and not attachments and (early := self.before_anything(as_of)) is not None:
+        # The crisis guard's meaning is heard while the answer is looked up; nothing is said before it is, and a
+        # lookup that fails still leaves the crisis reply to be said.
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            hearing = pool.submit(copy_context().run, CrisisGuard(self.embedder, self.llm).check, messages)
+            try:
+                early = self._early_reply(messages, as_of, persist=persist, sliced=sliced, attachments=attachments)
+                if early is None:
+                    ctx = self._search(messages, as_of, today)
+                    ctx.today = today
+                    ctx.owner_said = list(owner_said)[-OWNER_SAID_TURNS:]
+                    ctx.team_answers = list(team_answers)
+                    self._attach_files(ctx, attachments)
+                    self._derive(messages, ctx)
+            except Exception:
+                if hearing.result() is not None:
+                    return crisis_reply()
+                raise
+            if hearing.result() is not None:
+                return crisis_reply()
+        if early is not None:
             return early
-        ctx = self._search(messages, as_of, today)
-        ctx.today = today
-        ctx.owner_said = list(owner_said)[-OWNER_SAID_TURNS:]
-        ctx.team_answers = list(team_answers)
-        self._attach_files(ctx, attachments)
-        self._derive(messages, ctx)
         with default_stage("chat.answer"):
             draft = self.llm.structured(
                 system=chat_system_prompt(self.store.get_meta("identity:name") or self.settings.target_name, ctx),
@@ -1200,34 +1209,46 @@ class PersonaChat:
         words begins, for the page to say what it waits for. ``sliced``: as in ``reply``."""
         if not messages or messages[-1].role != "user":
             raise ValueError("the last message must be the user's")
-        if await off_loop(partial(CrisisGuard(self.embedder, self.llm).check, messages)) is not None:
+        if in_crisis(messages[-1].content):
             crisis = crisis_reply()
             yield crisis.reply
             yield crisis
             return
-        if (refused := await off_loop(partial(self._avoided_reply, messages))) is not None:
-            yield refused.reply
-            yield refused
-            return
-        # Every store read and write runs off the event loop, which other requests share.
-        if persist and (unbuilt := await off_loop(partial(self._unbuilt_reply, as_of))) is not None:
-            yield unbuilt.reply
-            yield unbuilt
-            return
-        if sliced and not attachments and (early := await off_loop(partial(self.before_anything, as_of))) is not None:
+        # The crisis guard's meaning is heard while the answer is looked up, as in ``reply``.
+        hearing = asyncio.ensure_future(off_loop(partial(CrisisGuard(self.embedder, self.llm).check, messages)))
+        try:
+            try:
+                # Every store read and write runs off the event loop, which other requests share.
+                early = await off_loop(
+                    partial(self._early_reply, messages, as_of, persist=persist, sliced=sliced, attachments=attachments)
+                )
+                if early is None:
+                    if steps:
+                        yield Step("search")
+                    ctx = await off_loop(partial(self._search, messages, as_of))
+                    ctx.owner_said = list(owner_said)[-OWNER_SAID_TURNS:]
+                    ctx.team_answers = list(team_answers)
+                    self._attach_files(ctx, attachments)
+                    if found_material(ctx):
+                        if steps:
+                            yield Step("think")
+                        await off_loop(partial(self._derive, messages, ctx))
+            except Exception:
+                if await hearing is None:
+                    raise
+                early = crisis_reply()
+            else:
+                if await hearing is not None:
+                    early = crisis_reply()
+        finally:
+            if not hearing.done():
+                hearing.cancel()
+                with suppress(asyncio.CancelledError):
+                    await hearing
+        if early is not None:
             yield early.reply
             yield early
             return
-        if steps:
-            yield Step("search")
-        ctx = await off_loop(partial(self._search, messages, as_of))
-        ctx.owner_said = list(owner_said)[-OWNER_SAID_TURNS:]
-        ctx.team_answers = list(team_answers)
-        self._attach_files(ctx, attachments)
-        if found_material(ctx):
-            if steps:
-                yield Step("think")
-            await off_loop(partial(self._derive, messages, ctx))
         if steps:
             yield Step("write")
         system, user = await off_loop(
@@ -1299,6 +1320,25 @@ class PersonaChat:
     def _attach_files(ctx: PersonaContext, attachments: Sequence[AttachmentPassage]) -> None:
         ctx.attachments = list(attachments)
         ctx.ids.update(passage.citation_id for passage in attachments)
+
+    def _early_reply(
+        self,
+        messages: Sequence[ChatTurn],
+        as_of: dt.date | None,
+        *,
+        persist: bool,
+        sliced: bool,
+        attachments: Sequence[AttachmentPassage],
+    ) -> ChatReply | None:
+        """The fixed reply that answers before anything is looked up: an heir's avoided topic, nothing built yet, or
+        nothing of the person known by the year they look back to; None when the question is to be answered."""
+        if (refused := self._avoided_reply(messages)) is not None:
+            return refused
+        if persist and (unbuilt := self._unbuilt_reply(as_of)) is not None:
+            return unbuilt
+        if sliced and not attachments and (early := self.before_anything(as_of)) is not None:
+            return early
+        return None
 
     def _avoided_reply(self, messages: Sequence[ChatTurn]) -> ChatReply | None:
         """For an heir, the fixed reply when the question (the latest two turns, which retrieval would look up) speaks

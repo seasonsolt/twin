@@ -121,6 +121,7 @@ LAYERS: dict[str, int] = {
     "evals.personal": 8,
     "evals.persona_runtime": 8,
     "evals.heirs": 8,
+    "evals.crisis": 8,
     "evals.longmemeval": 8,
     "evals.personamem": 8,
     "evals.personamem2": 8,

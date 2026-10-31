@@ -40,7 +40,7 @@ from . import gate, lifecycle
 from .assistant import ASSISTANT_MEETING_SECTION, ASSISTANT_STREAM_FORMAT, ASSISTANT_SYSTEM
 from .attachments import AttachmentPassage
 from .connect import connect
-from .crisis import crisis_reply, in_crisis
+from .crisis import CrisisGuard, crisis_reply
 from .derive import derive, needs_derivation
 from .dimensions import DIMENSIONS, FACET_BY_ID, FACETS
 from .heirs import avoided, avoided_reply, close_to, embed_topics, grant, item_words, mentions
@@ -1161,7 +1161,7 @@ class PersonaChat:
         then, it says so and asks no model."""
         if not messages or messages[-1].role != "user":
             raise ValueError("the last message must be the user's")
-        if in_crisis(messages[-1].content):
+        if CrisisGuard(self.embedder, self.llm).check(messages) is not None:
             return crisis_reply()
         if (refused := self._avoided_reply(messages)) is not None:
             return refused
@@ -1200,7 +1200,7 @@ class PersonaChat:
         words begins, for the page to say what it waits for. ``sliced``: as in ``reply``."""
         if not messages or messages[-1].role != "user":
             raise ValueError("the last message must be the user's")
-        if in_crisis(messages[-1].content):
+        if await off_loop(partial(CrisisGuard(self.embedder, self.llm).check, messages)) is not None:
             crisis = crisis_reply()
             yield crisis.reply
             yield crisis

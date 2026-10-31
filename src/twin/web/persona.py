@@ -53,7 +53,7 @@ from ..persona.chat import (
     search_items,
 )
 from ..persona.coverage import CHECKED_LABEL, LEVEL_LABELS, coverage_report
-from ..persona.crisis import crisis_reply, in_crisis
+from ..persona.crisis import CRISIS_REPLY, crisis_reply, in_crisis
 from ..persona.dimensions import DIMENSION_BY_ID, DIMENSIONS, FACET_BY_ID, FACETS, TAXONOMY_VERSION
 from ..persona.items import PersonaItem, PReview
 from ..persona.kernel import KERNEL, rebuild_scope
@@ -342,10 +342,14 @@ def chat_payload(
     attachment_passages: Sequence[AttachmentPassage] = (),
     audience: Audience = SELF,
 ) -> dict[str, Any]:
-    return {
+    payload = {
         **reply.model_dump(mode="json"),
         "cited": cited_view(store, reply.citations, {p.citation_id: p for p in attachment_passages}, audience),
     }
+    # The crisis guard's meaning layer answers inside ``PersonaChat``; its reply is marked for the page like the words'.
+    if reply.reply == CRISIS_REPLY:
+        payload["crisis"] = True
+    return payload
 
 
 def cited_view(

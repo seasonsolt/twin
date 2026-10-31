@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, type ReactNode } from 'react';
-import { ArrowUp, Copy, Play, Plus, X } from 'lucide-react';
+import { ArrowUp, CircleHelp, Copy, Play, Plus, X } from 'lucide-react';
 import { MessageList } from '../../components/effects/MessageList';
 import { PersonaFade } from '../../components/motion/PersonaFade';
 import { PersonaPortrait } from '../../components/layout/PersonaSwitcher';
@@ -176,7 +176,8 @@ export function ChatThread({
   // Commitments are listed in a page an administrator can switch off; where it is off, they are not spoken of either.
   const ledgerOn = useAuth((auth) => featureOn(auth.identity, 'ledger'));
   const identity = useIdentity(active);
-  const { audio, video, capabilities, toggleReply, speaking } = playback;
+  const { audio, video, capabilities, toggleReply, speaking, speakable } =
+    playback;
   const status = useStatus((state) => state.data);
   const { end, composer, composerHeight } = layout;
   const attachmentInput = useRef<HTMLInputElement>(null);
@@ -523,7 +524,21 @@ export function ChatThread({
                                     aria-label="回复媒体"
                                     className="answer-controls ml-auto flex items-center"
                                   >
-                                    {capabilities?.available && (
+                                    {capabilities?.available &&
+                                      !speakable(turn) && (
+                                        <Tooltip label="在「关于你」同意用你的声音后，可以用它朗读">
+                                          <IconButton
+                                            label="怎么朗读内在声音"
+                                            shape="circle"
+                                          >
+                                            <CircleHelp
+                                              className="size-4"
+                                              aria-hidden
+                                            />
+                                          </IconButton>
+                                        </Tooltip>
+                                      )}
+                                    {speakable(turn) && (
                                       <PlainButton
                                         shape="circle"
                                         className="reply-play min-h-11 min-w-11"

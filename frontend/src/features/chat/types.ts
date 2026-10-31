@@ -93,6 +93,8 @@ export interface ChatReply {
   delegation?: DelegationNote;
   /** The message spoke of ending one's life or harming oneself: the fixed reply that says where help is. */
   crisis?: boolean;
+  /** The way the person was talking with their own assistant when it answered (照镜子, 内在声音…). */
+  reflection?: Reflection;
   /** The twin said goodbye to an heir past their day to leave (P2.8), and answers them no more. */
   farewell?: boolean;
   commitment?: PromiseLine;

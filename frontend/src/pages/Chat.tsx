@@ -295,8 +295,14 @@ export function Chat() {
     );
   }, [withParam, openParam, people, switchTo, showOwn, setParams]);
   const playback = usePlayback({ active, chat, name, openStage });
-  const { audio, capabilities, currentTurn, toggleReply, stopPlayback } =
-    playback;
+  const {
+    audio,
+    capabilities,
+    currentTurn,
+    toggleReply,
+    stopPlayback,
+    speakable,
+  } = playback;
   const composerLayout = useComposerLayout(active);
   const { page } = composerLayout;
 
@@ -593,11 +599,11 @@ export function Chat() {
         ))}
       </Select>
     ) : undefined;
-  const speakLast = () => {
-    toggleReply(
-      [...chat.turns].reverse().find((turn) => turn.reply?.reply.trim()),
-    );
-  };
+  // The latest answer that can be read aloud: an inner voice without the person's agreed voice is passed over.
+  const lastSpeakable = [...chat.turns]
+    .reverse()
+    .find((turn) => turn.reply?.reply.trim() && speakable(turn));
+  const speakLast = () => toggleReply(lastSpeakable);
   const more =
     mode === 'chat' ? (
       <ActionMenu
@@ -605,9 +611,7 @@ export function Chat() {
         items={[
           {
             label: '语音',
-            disabled:
-              !capabilities?.available ||
-              !chat.turns.some((turn) => turn.reply?.reply.trim()),
+            disabled: !lastSpeakable,
             onSelect: speakLast,
           },
           {
@@ -777,10 +781,9 @@ export function Chat() {
                 thinking={chat.busy && !chat.newest}
                 onToggle={() =>
                   toggleReply(
-                    currentTurn ??
-                      [...chat.turns]
-                        .reverse()
-                        .find((turn) => turn.reply?.reply.trim()),
+                    currentTurn && speakable(currentTurn)
+                      ? currentTurn
+                      : lastSpeakable,
                     true,
                   )
                 }

@@ -71,6 +71,7 @@ const said = (id: string, reply: ChatReply): Turn => ({
 let server: ReturnType<typeof conversationServer>;
 let fetcher: ReturnType<typeof vi.fn>;
 let streamed: ReturnType<typeof answer>[];
+let media: object;
 const bodyOf = (url: string, method?: string) =>
   fetcher.mock.calls
     .filter(
@@ -176,6 +177,7 @@ beforeEach(() => {
     updated_at: '2026-10-20T08:00:00',
   });
   streamed = [];
+  media = { available: false, video: { available: false } };
   fetcher = vi.fn(async (url: string, init?: RequestInit) => {
     const saved = server.respond(url, init);
     if (saved) return saved;
@@ -189,8 +191,7 @@ beforeEach(() => {
         server.append(init!, streamed[0] ?? answer({ reply: '好的。' }));
       return stream(streamed.shift() ?? answer({ reply: '好的。' }));
     }
-    if (url === '/api/media/capabilities')
-      return json({ available: false, video: { available: false } });
+    if (url === '/api/media/capabilities') return json(media);
     if (url.startsWith('/api/persona/notes/')) return json({ ok: true });
     if (url.startsWith('/api/persona/ledger/')) return json({ ok: true });
     return json({ stale: false });
@@ -1094,6 +1095,51 @@ it('lets the person hear their own principles said back as their inner voice', a
     reflection: 'voice',
   });
 });
+
+it.each([false, true])(
+  'never reads the inner voice by itself nor makes it a video, and reads it in the person’s agreed voice only (own voice %s)',
+  async (ownVoice) => {
+    const person = userEvent.setup();
+    vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
+    media = {
+      available: true,
+      own_voice: ownVoice,
+      video: { available: true },
+    };
+    streamed.push(
+      answer({
+        reply: '你说过：“先说清楚”。你会怎么选？',
+        reflection: 'voice',
+      }),
+    );
+    mount(personas, '/chat', { work: false });
+    await list();
+    await screen.findByText('仅你可见');
+    const ways = screen.getByRole('radiogroup', { name: '这一轮' });
+    await person.click(within(ways).getByRole('radio', { name: '内在声音' }));
+    await person.type(screen.getByRole('textbox', { name: '你说' }), '纠结');
+    await person.click(screen.getByRole('button', { name: '发送' }));
+    const reply = (await screen.findByText(/你会怎么选？/)).closest('article')!;
+    const called = (path: string) =>
+      fetcher.mock.calls.some(([url]) => url === path);
+    expect(called('/api/media/audio')).toBe(false);
+    expect(called('/api/media/video')).toBe(false);
+    const play = within(reply).queryByRole('button', { name: /说这句/ });
+    if (!ownVoice) {
+      expect(play).toBeNull();
+      expect(
+        within(reply).getByRole('button', { name: '怎么朗读内在声音' }),
+      ).toBeVisible();
+      return;
+    }
+    expect(
+      within(reply).queryByRole('button', { name: '怎么朗读内在声音' }),
+    ).toBeNull();
+    await person.click(play!);
+    await waitFor(() => expect(called('/api/media/audio')).toBe(true));
+    expect(called('/api/media/video')).toBe(false);
+  },
+);
 
 it('in the persona edition offers no colleague’s answer to try, and says where help is with no word on how it answered', async () => {
   const person = userEvent.setup();

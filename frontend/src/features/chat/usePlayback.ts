@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import type { Capabilities } from '../avatar/types';
 import { loadEssential, peekEssential } from '../../lib/personaPrefetch';
 import {
@@ -9,6 +9,9 @@ import type { useConversation } from './useConversation';
 import { useReplyAudio } from './useReplyAudio';
 import { useReplyVideos, videoUrl } from './useReplyVideos';
 import type { Turn } from './types';
+
+/** An answer of 内在声音 (P3.4): read only in the person's own voice, which they agreed to, and only when they ask. */
+export const innerVoice = (turn?: Turn) => turn?.reply?.reflection === 'voice';
 
 /**
  * Speaking the twin's answers: what the voice and the video can do, which answer is playing, and the choice between
@@ -56,6 +59,7 @@ export function usePlayback({
       !active ||
       !capabilities?.available ||
       !turn?.reply ||
+      innerVoice(turn) ||
       !turn.reply.reply.trim() ||
       autoSpoken.current === turn.id
     )
@@ -63,9 +67,14 @@ export function usePlayback({
     autoSpoken.current = turn.id;
     audio.toggle(turn.id, turn.reply, name);
   }, [active, capabilities, chat.turns, chat.newest, audio, name]);
+  // The inner voice is only read aloud, never made into a video.
+  const videoTurns = useMemo(
+    () => chat.turns.filter((turn) => !innerVoice(turn)),
+    [chat.turns],
+  );
   const video = useReplyVideos(
     active && !!capabilities?.video?.available,
-    chat.turns,
+    videoTurns,
     name,
     capabilities?.video?.asset_key ?? '',
   );
@@ -86,8 +95,13 @@ export function usePlayback({
   const currentTurn = chat.turns.find(
     (turn) => turn.id === (videoId || audio.id || chat.newest),
   );
+  /** Whether this answer can be read aloud now. */
+  const speakable = (turn?: Turn) =>
+    !!turn?.reply &&
+    !!capabilities?.available &&
+    (!innerVoice(turn) || !!capabilities.own_voice);
   const toggleReply = (turn?: Turn, preferVideo = false) => {
-    if (!turn?.reply) return;
+    if (!turn?.reply || !speakable(turn)) return;
     openStage();
     if (videoId === turn.id && videoPlaying) {
       setVideoPlaying(false);
@@ -129,6 +143,7 @@ export function usePlayback({
     toggleReply,
     stopPlayback,
     speaking,
+    speakable,
   };
 }
 

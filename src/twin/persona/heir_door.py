@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
 
-from . import lifecycle, will
+from . import lifecycle, retirement, will
 from .store import PersonaStore
 
 # How long an heir's session lasts on the server; the cookie itself ends with the browser.
@@ -65,6 +65,8 @@ class Session:
     heir_id: str
     name: str
     person: str | None
+    # The twin has said goodbye to them (``persona.retirement``): their conversations are only to read.
+    gone: bool = False
 
 
 def digest(token: str) -> str:
@@ -153,8 +155,16 @@ def session_at(db_path: Path, token: str, now: float) -> Session | None:
                 " WHERE s.hash = ? AND s.expires > ?",
                 (digest(token), now),
             ).fetchone()
+            if row is None:
+                return None
+            heir = json.loads(row[1])
+            leaves = heir.get("retire_on")
+            gone = (
+                bool(leaves)
+                and dt.date.fromisoformat(leaves) <= dt.date.today()
+                and db.execute("SELECT 1 FROM p_meta WHERE key = ?", (retirement.SAID_PREFIX + row[0],)).fetchone()
+                is not None
+            )
     except sqlite3.Error:
         return None
-    if row is None:
-        return None
-    return Session(heir_id=row[0], name=str(json.loads(row[1])["name"]), person=meta.get("identity:name") or None)
+    return Session(heir_id=row[0], name=str(heir["name"]), person=meta.get("identity:name") or None, gone=gone)

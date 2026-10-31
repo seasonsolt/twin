@@ -38,6 +38,8 @@ export interface Heir {
   person: string | null;
   /** The twin they opened. */
   persona: string;
+  /** The twin has said goodbye to them (P2.8): their conversations are only to read. */
+  gone?: boolean;
 }
 
 /** The heir in this browser, if one is in. */

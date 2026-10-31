@@ -5,6 +5,7 @@ while the memory is not sealed."""
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import sqlite3
 from collections.abc import Iterator
@@ -28,7 +29,7 @@ from test_heirs import (
 
 from twin.config import Settings
 from twin.embed import HashingEmbedder
-from twin.persona import lifecycle
+from twin.persona import lifecycle, will
 from twin.persona.store import PersonaStore
 from twin.web import create_app
 from twin.web.jobs import PersonaProcessing
@@ -120,6 +121,22 @@ def test_a_rehearsal_keeps_nothing(web: tuple[TestClient, Recorder, dict[str, An
     assert client.get("/api/conversations").json() == []
     with PersonaStore(ctx["path"]) as store:
         assert not lifecycle.sealed(store)
+
+
+def test_a_rehearsal_of_an_heir_past_their_day_shows_the_goodbye_and_keeps_nothing(
+    web: tuple[TestClient, Recorder, dict[str, Any]],
+) -> None:
+    client, llm, ctx = web
+    with PersonaStore(ctx["path"]) as store:
+        heir = will.get(store, ctx["heir_id"])
+        draft = will.HeirDraft.model_validate(heir.model_dump(include=set(will.HeirDraft.model_fields)))
+        draft = draft.model_copy(update={"retire_on": dt.date.today(), "farewell": "阿明，往后要好好的。"})
+        will.update(store, ctx["heir_id"], draft, None, "person", dt.datetime.now(dt.UTC))
+    before = rows(ctx["path"])
+    for _ in range(2):
+        said = final(rehearse(client, ctx["heir_id"], QUESTION))
+        assert said["reply"] == "阿明，往后要好好的。" and said["farewell"] is True
+    assert not llm.seen and rows(ctx["path"]) == before
 
 
 def test_only_the_person_rehearses_only_an_heir_the_will_names_and_not_once_sealed(

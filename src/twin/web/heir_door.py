@@ -129,6 +129,7 @@ class HeirSessionMiddleware:
                     "name": session.name,
                     "person": session.person,
                     "persona": persona_id,
+                    "gone": session.gone,
                 }
         await self.app(scope, receive, send)
 

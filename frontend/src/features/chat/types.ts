@@ -92,6 +92,8 @@ export interface ChatReply {
   delegation?: DelegationNote;
   /** The message spoke of ending one's life or harming oneself: the fixed reply that says where help is. */
   crisis?: boolean;
+  /** The twin said goodbye to an heir past their day to leave (P2.8), and answers them no more. */
+  farewell?: boolean;
   commitment?: PromiseLine;
   /** A lens's answer (a colleague asked the person's lens): statements with their basis, in place of the twin's words. */
   lens?: LensCardData;

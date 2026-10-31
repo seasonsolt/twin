@@ -140,6 +140,9 @@ export function HeirChat({ heir }: { heir: Heir }) {
       setLeaving(false);
     }
   };
+  // Once the twin has said goodbye (P2.8), what was said stays to read and nothing more is asked.
+  const gone =
+    !!heir.gone || chat.turns.some((turn) => turn.reply?.farewell === true);
   const failure = error || chat.error;
   return (
     <main className="mx-auto flex h-dvh w-full max-w-3xl flex-col gap-4 px-4 py-6">
@@ -162,14 +165,16 @@ export function HeirChat({ heir }: { heir: Heir }) {
               ))}
             </Select>
           )}
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={!chat.turns.length}
-            onClick={chat.clear}
-          >
-            新对话
-          </Button>
+          {!gone && (
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={!chat.turns.length}
+              onClick={chat.clear}
+            >
+              新对话
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="sm"
@@ -182,7 +187,7 @@ export function HeirChat({ heir }: { heir: Heir }) {
       </Toolbar>
       <div className="min-h-0 flex-1 overflow-y-auto">
         {chat.turns.length === 0 && !chat.loading ? (
-          <HeirGreeting heir={heir.name} person={person} />
+          !gone && <HeirGreeting heir={heir.name} person={person} />
         ) : (
           <Stack gap={4}>
             {chat.turns.map((turn) => (
@@ -207,14 +212,20 @@ export function HeirChat({ heir }: { heir: Heir }) {
           {failure}
         </Text>
       )}
-      <HeirComposer
-        person={person}
-        value={chat.draft}
-        onChange={chat.setDraft}
-        onSend={send}
-        busy={chat.busy}
-        disabled={chat.loading}
-      />
+      {gone ? (
+        <Text tone="secondary" align="center">
+          已经道别
+        </Text>
+      ) : (
+        <HeirComposer
+          person={person}
+          value={chat.draft}
+          onChange={chat.setDraft}
+          onSend={send}
+          busy={chat.busy}
+          disabled={chat.loading}
+        />
+      )}
     </main>
   );
 }

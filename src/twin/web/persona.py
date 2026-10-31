@@ -31,7 +31,7 @@ from ..delegations import Asked, Unclear
 from ..embed import Embedder, EmbedError
 from ..handoffs import HandoffDesk
 from ..llm import LLM, Effort
-from ..persona import gate, heirs, lifecycle, will
+from ..persona import gate, heirs, lifecycle, retirement, will
 from ..persona.assistant import note_text
 from ..persona.attachments import (
     MAX_CHAT_ATTACHMENT_BYTES,
@@ -75,7 +75,7 @@ from ..persona.schema import SOURCE_KIND_LABELS, ChatReply, ChatTurn, ReviewStat
 from ..persona.sources import MEMORY_KIND_LABELS, expression_view, parse_note, parse_upload
 from ..persona.store import PersonaStore, stored_identity
 from ..persona.text import extract_text
-from ..persona.tiers import COLLEAGUE, SELF, Audience, PrivateWords, Tier, heir_audience, is_heir, item_tier
+from ..persona.tiers import COLLEAGUE, SELF, Audience, PrivateWords, Tier, heir_audience, heir_of, is_heir, item_tier
 from ..teamanswers import prompt_line, question_of
 from ..usage import CallRow, collect_calls, model_tokens, rate_limited, transient_summary
 from . import assistant as assistant_routes
@@ -1288,6 +1288,7 @@ def register(
         asker = None if is_heir(audience) else (desk, request_asker_name(request))
         assistant = audience == SELF and bool(request.scope.get("twin_person"))
         as_of = body.as_of if assistant else None
+        farewell = None if in_crisis(messages[-1].content) else farewell_for(audience, False)
         with open_store() as store:
             if assistant:
                 keep_as_of(store, body.conversation_id, email, as_of)
@@ -1295,6 +1296,12 @@ def register(
                 append_user(store, body.conversation_id, email, messages[-1].content, index)
                 payload = {**chat_payload(store, crisis_reply(), audience=audience), "crisis": True}
                 return JSONResponse(append_reply(store, body.conversation_id, email, payload, index), status_code=200)
+            if farewell is not None:
+                append_user(store, body.conversation_id, email, messages[-1].content, index)
+                payload = {**chat_payload(store, farewell, audience=audience), "farewell": True}
+                kept = append_reply(store, body.conversation_id, email, payload, index)
+                keep_farewell(store, audience)
+                return JSONResponse(kept, status_code=200)
             if not store.has_items():
                 append_user(store, body.conversation_id, email, messages[-1].content, index)
                 reply = no_profile_reply(store, as_of)
@@ -1343,15 +1350,41 @@ def register(
         """The message speaks of ending one's life or harming oneself (``persona.crisis``): the conversation stops
         with the fixed reply that says where help is. No model is asked, so nothing can delay or change it; a trial
         question keeps nothing, as always."""
+        return fixed_response(crisis_reply(), "crisis", message, body, email, audience)
+
+    def farewell_for(audience: Audience, preview: bool) -> ChatReply | None:
+        """退场 (``persona.retirement``): the goodbye an heir past their day to leave is told, once; a rehearsal shows
+        it each time. None for anyone else; 403 once it was said, the heir's conversations staying to read."""
+        with open_store() as store:
+            heir = retirement.leaving(store, audience, dt.date.today())
+            if heir is None:
+                return None
+            if not preview and retirement.said(store, heir.heir_id):
+                raise HTTPException(403, retirement.RETIRED)
+        return retirement.farewell_reply(heir)
+
+    def keep_farewell(store: PersonaStore, audience: Audience) -> None:
+        if (heir_id := heir_of(audience)) is not None:
+            retirement.say_farewell(store, heir_id, dt.datetime.now(dt.UTC))
+
+    def fixed_response(
+        reply: ChatReply, flag: str, message: str, body: ChatBody, email: str | None, audience: Audience
+    ) -> StreamingResponse:
+        """A reply said as it is, before anything is looked up or any model asked, marked ``flag`` for the page: kept
+        in the conversation like any other, or nothing of it with a trial question. A goodbye (``farewell``) is kept
+        as said."""
 
         def keep() -> dict[str, Any]:
             with open_store() as store:
-                payload = {**chat_payload(store, crisis_reply(), audience=audience), "crisis": True}
+                payload = {**chat_payload(store, reply, audience=audience), flag: True}
                 payload["completed_at"] = dt.datetime.now(dt.UTC).isoformat(timespec="milliseconds")
                 if body.preview:
                     return payload
                 append_user(store, body.conversation_id, email, message, index)
-                return append_reply(store, body.conversation_id, email, payload, index)
+                kept = append_reply(store, body.conversation_id, email, payload, index)
+                if flag == "farewell":
+                    keep_farewell(store, audience)
+                return kept
 
         async def events() -> AsyncGenerator[str]:
             yield ": connected\n\n"
@@ -1522,6 +1555,9 @@ def register(
         # Before anything else, whoever asks: a message of ending one's life or harming oneself stops here.
         if in_crisis(messages[-1].content):
             return crisis_response(messages[-1].content, body, email, audience)
+        # An heir past their day to leave is told goodbye, once, and answered no more (P2.8).
+        if (farewell := farewell_for(audience, preview)) is not None:
+            return fixed_response(farewell, "farewell", messages[-1].content, body, email, audience)
         # The person's own conversation is answered by their assistant, which also takes down notes and promises.
         assistant = audience == SELF and bool(request.scope.get("twin_person")) and not preview
         # An heir's conversation hands nothing to the person and is shown none of the team's answers.

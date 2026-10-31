@@ -191,3 +191,19 @@ it('becomes the way in when the twin is sealed while the page is open', async ()
   expect(await screen.findByText('记忆已冻结')).toBeInTheDocument();
   expect(screen.queryByText('本人的对话页')).not.toBeInTheDocument();
 });
+
+it('once the twin has said goodbye, leaves the heir what was said to read and nothing to ask', async () => {
+  whoami = { ...heir, heir: { ...heir.heir, gone: true } };
+  render(<App />);
+  expect(await screen.findByText('已经道别')).toBeInTheDocument();
+  expect(
+    await screen.findByRole('combobox', { name: '以前的对话' }),
+  ).toBeInTheDocument();
+  expect(
+    screen.queryByRole('textbox', { name: '你说' }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole('button', { name: '新对话' }),
+  ).not.toBeInTheDocument();
+  expect(screen.queryByText(/就在下面写/)).not.toBeInTheDocument();
+});

@@ -553,6 +553,49 @@ const pages: {
       }, heirConversation.id);
     },
   },
+  // The twin has said goodbye to the heir (P2.8): what was said stays to read, and nothing more is asked.
+  {
+    name: 'chat-heir-gone',
+    path: '/#/chat',
+    ready: '认准了就不撒手',
+    setup: async (page: Page) => {
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      await page.route('**/api/whoami', (route) =>
+        route.fulfill({
+          json: {
+            email: null,
+            admin: false,
+            auth_enabled: false,
+            edition: 'persona',
+            heir: {
+              id: 'heir_yu',
+              name: '小雨',
+              person: '林舟',
+              persona: 'default',
+              gone: true,
+            },
+          },
+        }),
+      );
+      await page.route('**/api/conversations', (route) =>
+        route.fulfill({
+          json: [
+            {
+              id: heirConversation.id,
+              title: heirConversation.title,
+              updated_at: '2026-10-17T01:30:08Z',
+            },
+          ],
+        }),
+      );
+      await page.addInitScript((opened) => {
+        localStorage.setItem(
+          'twin.heir:heir_yu:default:twin.current.conversation',
+          opened,
+        );
+      }, heirConversation.id);
+    },
+  },
   // The person's own twin once sealed (P2.7): this computer is the heirs' way in and nothing else.
   {
     name: 'heirs-only',

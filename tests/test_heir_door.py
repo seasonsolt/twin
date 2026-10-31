@@ -6,6 +6,7 @@ and entry is logged, never the word."""
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 import sqlite3
 from collections.abc import Iterator
@@ -19,9 +20,10 @@ from test_heirs import FAMILY, WITHHELD, WORK, Recorder, markers, name_heir, see
 
 from twin.config import Settings
 from twin.embed import HashingEmbedder
-from twin.persona import heir_door, lifecycle, will
+from twin.persona import heir_door, lifecycle, retirement, will
 from twin.persona import store as storage
 from twin.persona.store import PersonaStore, list_snapshots
+from twin.persona.tiers import heir_audience
 from twin.web import create_app
 from twin.web.heir_door import COOKIE, HEIRS_ONLY, WRONG
 from twin.web.jobs import PersonaProcessing
@@ -219,7 +221,13 @@ def test_on_the_web_the_first_opening_asks_then_seals_and_lets_the_heir_in(web: 
     assert any(p.name.endswith("-sealed.db") for p in list_snapshots(web["path"]))
     # The page learns who is there, and that they manage nothing.
     me = client.get("/api/whoami").json()
-    assert me["heir"] == {"id": web["first"], "name": "小明", "person": "张三", "persona": me["heir"]["persona"]}
+    assert me["heir"] == {
+        "id": web["first"],
+        "name": "小明",
+        "person": "张三",
+        "persona": me["heir"]["persona"],
+        "gone": False,
+    }
     assert me["admin"] is False and me["heir"]["persona"] == client.cookies[COOKIE].rpartition(".")[0]
     # Every other browser on this computer is shown the heirs' way in and nothing else: no memory, will, settings or
     # twins, read or written.
@@ -311,3 +319,66 @@ def test_the_log_keeps_every_opening_and_entry_and_never_the_word(
     dump, said = raw_dump(web["path"]), caplog.text
     for secret in (WORD, OTHER_WORD, "错的口令xyz", first.cookies[COOKIE].rpartition(".")[2]):
         assert secret not in dump and secret not in said
+
+
+# ---------------------------------------------------------------- 退场 (P2.8)
+
+
+def say(client: TestClient, conversation: str, text: str) -> Any:
+    body = {"messages": [{"role": "user", "content": text}], "conversation_id": conversation}
+    return client.post("/api/persona/chat/stream", json=body, headers=CSRF)
+
+
+def said(response: Any) -> dict[str, Any]:
+    assert response.status_code == 200 and "event: final" in response.text, response.text
+    return json.loads(response.text.split("event: final\ndata: ", 1)[1].split("\n\n", 1)[0])  # type: ignore[no-any-return]
+
+
+def test_from_their_day_the_twin_says_goodbye_once_and_their_conversations_stay_to_read(
+    web: dict[str, Any],
+) -> None:
+    first, second = web["heirs"]
+    with PersonaStore(web["path"]) as store:
+        heir = will.get(store, web["first"])
+        draft = will.HeirDraft.model_validate(heir.model_dump(include=set(will.HeirDraft.model_fields)))
+        draft = draft.model_copy(update={"retire_on": dt.date.today(), "farewell": "小明，往后要好好的。"})
+        will.update(store, web["first"], draft, None, "person", NOW)
+    assert open_(first, "小明", WORD, confirm=True).json()["status"] == "open"
+    assert open_(second, "小红", OTHER_WORD).json()["status"] == "open"
+    assert first.get("/api/whoami").json()["heir"]["gone"] is False
+    conversation = first.post("/api/conversations", json={}, headers=CSRF).json()["id"]
+    # The first question on their day is answered with the person's own goodbye, and nothing is looked up.
+    goodbye = said(say(first, conversation, "你还记得我小时候的事吗"))
+    assert goodbye["reply"] == "小明，往后要好好的。" and goodbye["farewell"] is True and goodbye["citations"] == []
+    assert first.get("/api/whoami").json()["heir"]["gone"] is True
+    # Then nothing more is answered, nor a conversation begun, renamed or deleted; what was said stays to read.
+    again = say(first, conversation, "再说一句吧")
+    assert again.status_code == 403 and again.json()["detail"] == retirement.RETIRED
+    assert first.post("/api/conversations", json={}, headers=CSRF).status_code == 403
+    assert first.patch(f"/api/conversations/{conversation}", json={"title": "x"}, headers=CSRF).status_code == 403
+    assert first.delete(f"/api/conversations/{conversation}", headers=CSRF).status_code == 403
+    turns = first.get(f"/api/conversations/{conversation}").json()["turns"]
+    assert [(t["role"], t.get("reply", {}).get("reply")) for t in turns] == [
+        ("user", None),
+        ("twin", "小明，往后要好好的。"),
+    ]
+    assert [c["id"] for c in first.get("/api/conversations").json()] == [conversation]
+    # An heir whose day has not come, or who has none, is answered as ever.
+    theirs = second.post("/api/conversations", json={}, headers=CSRF).json()["id"]
+    answered = said(say(second, theirs, "家里人都好吗"))
+    assert answered.get("farewell") is None and answered["reply"]
+    assert second.get("/api/whoami").json()["heir"]["gone"] is False
+
+
+def test_an_heir_with_a_day_still_to_come_is_answered_as_ever(web: dict[str, Any]) -> None:
+    first = web["heirs"][0]
+    with PersonaStore(web["path"]) as store:
+        heir = will.get(store, web["first"])
+        draft = will.HeirDraft.model_validate(heir.model_dump(include=set(will.HeirDraft.model_fields)))
+        draft = draft.model_copy(update={"retire_on": dt.date.today() + dt.timedelta(days=1)})
+        will.update(store, web["first"], draft, None, "person", NOW)
+        assert retirement.leaving(store, heir_audience(web["first"]), dt.date.today()) is None
+        assert retirement.leaving(store, heir_audience(web["first"]), dt.date.today() + dt.timedelta(days=1))
+    assert open_(first, "小明", WORD, confirm=True).json()["status"] == "open"
+    conversation = first.post("/api/conversations", json={}, headers=CSRF).json()["id"]
+    assert said(say(first, conversation, "你还记得我小时候的事吗")).get("farewell") is None

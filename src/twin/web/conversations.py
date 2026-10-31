@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from ..config import Settings
 from ..handoffs import HandoffDesk
-from ..persona import self_ratings
+from ..persona import retirement, self_ratings
 from ..persona.assistant import annotate_notes, annotate_promises, record_promise
 from ..persona.heirs import tier_only
 from ..persona.store import PersonaStore
@@ -238,6 +238,15 @@ def append_reply(
     return payload
 
 
+def refuse_if_gone(store: PersonaStore, request: Request) -> None:
+    """403 when the twin has said goodbye to the heir asking (``persona.retirement``): their conversations are then
+    only to read."""
+    if (heir_id := request_heir(request)) is not None and retirement.gone(
+        store, heir_audience(heir_id), dt.date.today()
+    ):
+        raise HTTPException(403, retirement.RETIRED)
+
+
 def register(app: FastAPI, settings: Settings, index: ConversationIndex, desk: HandoffDesk) -> None:
     @app.get("/api/conversations")
     def list_conversations(request: Request, offset: int = Query(default=0, ge=0)) -> list[dict[str, Any]]:
@@ -248,6 +257,7 @@ def register(app: FastAPI, settings: Settings, index: ConversationIndex, desk: H
     def create_conversation(request: Request, body: CreateBody | None = None) -> dict[str, str]:
         body = body or CreateBody()
         with PersonaStore(settings.db_path) as store:
+            refuse_if_gone(store, request)
             try:
                 conversation_id = store.create_conversation(
                     owner(request),
@@ -284,6 +294,7 @@ def register(app: FastAPI, settings: Settings, index: ConversationIndex, desk: H
     @app.patch("/api/conversations/{conversation_id}")
     def rename_conversation(conversation_id: str, body: RenameBody, request: Request) -> dict[str, bool]:
         with PersonaStore(settings.db_path) as store:
+            refuse_if_gone(store, request)
             if not store.rename_conversation(conversation_id, owner(request), body.title):
                 raise HTTPException(404, "找不到这段对话")
             index.touched(store, conversation_id)
@@ -292,6 +303,7 @@ def register(app: FastAPI, settings: Settings, index: ConversationIndex, desk: H
     @app.delete("/api/conversations/{conversation_id}")
     def delete_conversation(conversation_id: str, request: Request) -> dict[str, bool]:
         with PersonaStore(settings.db_path) as store:
+            refuse_if_gone(store, request)
             if not store.delete_conversation(conversation_id, owner(request)):
                 raise HTTPException(404, "找不到这段对话")
             if conversation_as_of(store, conversation_id) is not None:

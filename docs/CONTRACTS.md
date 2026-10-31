@@ -64,6 +64,15 @@ Positioning: Identity → Memory upload → Service. Repository, project, Python
   （按给他的条目算，不带提问需求）；`GET /api/persona/life-story`（同上，本人以外只有继承人能读）；`/api/conversations` 的列表、新建、读、改名、删除。
   页面和静态资源不受影响。
 
+## 退场（P2.8）
+
+- `persona/retirement.py`。遗嘱里 `retire_on`（含当天）起，这位继承人的下一次 `POST /api/persona/chat` 或 `/chat/stream`
+  （危机护栏之后、任何检索和模型之前）回 `farewell`（本人写的告别语，没写时 `DEFAULT_FAREWELL`），回复多 `farewell: true`，存进对话；
+  `p_meta` 的 `heir_farewell:<heir_id>` 记下说过的时间（UTC ISO 8601）。
+- 说过以后：对话 403 `{"detail": "这段延续已经结束，以前的对话还能翻看"}`；`POST /api/conversations`、`PATCH` / `DELETE /api/conversations/{id}`
+  同样 403；`GET` 照常。`GET /api/whoami` 的 `heir` 多 `gone: bool`（`heir_door.Session.gone`）。没有 `retire_on` 不退场。
+- 预演（`preview` + `heir`）一位过了日期的继承人：每次都回告别，`farewell: true`，不记任何东西。
+
 ## 预演（P2.6）
 
 - **接口**：沿用试问。`POST /api/persona/chat/stream` 体带 `preview: true` 和 `heir: "<heir_id>"`（最多 100 字），按继承人档
@@ -88,7 +97,7 @@ Positioning: Identity → Memory upload → Service. Repository, project, Python
   两张表都不在检索读的表里，写它们不改记忆版本；从冻结前的快照回退后，会话和开启记录一起回到快照那一刻。口令和令牌都不落盘、不进日志。
 - **开启**：`open_door(store, name, password, confirm, now)`。称呼按遗嘱里的称呼比较（忽略大小写和多余空格）；称呼不在遗嘱里时也对一份随机口令
   的哈希算一次 scrypt，两种错误耗时相同、回答相同（`WrongWord`）。还没冻结时，称呼和口令都对但没有 `confirm`：返回 null，什么都不改；有 `confirm`：
-  `lifecycle.seal`（先快照）后建会话、记 `open`。已冻结时直接建会话、记 `enter`。退场（P2.8）还没做，过了 `retire_on` 的继承人现在照样能进入。
+  `lifecycle.seal`（先快照）后建会话、记 `open`。已冻结时直接建会话、记 `enter`。过了 `retire_on` 的继承人照样能进入，读得到以前的对话（P2.8）。
 - **冷却**：从最后一次 `open` / `enter` 之后数 `fail`，连续 `MAX_TRIES` = 5 次起，最后一次错误后等 `FIRST_COOLDOWN` = 60 秒，之后每多错一次翻倍，
   最长 `MAX_COOLDOWN` = 3600 秒；不分称呼（换着称呼猜一样计数）。冷却中不核对口令、不计数（对的口令也被拒）。计数从日志算，重启服务不清零。
 - **会话**：`session_at(db_path, token, now)` 只读打开分身库（不迁移），在记忆已冻结、会话没过期、遗嘱里仍有这位继承人时返回
@@ -103,7 +112,7 @@ Positioning: Identity → Memory upload → Service. Repository, project, Python
   - `HeirSessionMiddleware`（主应用里，登录之后、`HeirMiddleware` 之前）：cookie 打开一个活的会话时设 `scope["twin_heir"]`（继承人编号）、
     `scope["twin_heir_persona"]`（`personas.HEIR_PERSONA_SCOPE`）和 `scope["twin_heir_view"]`（`auth.HEIR_VIEW`）；分身编号只认注册表里有的。
     打不开任何东西的 cookie 什么都不改。`PersonaMiddleware` 对继承人的请求固定进他开启的分身，指名别的分身 403，`twin_person` 恒为 false。
-  - `GET /api/whoami` 对继承人多 `heir: {id, name, person, persona}`，`admin` 为 false。
+  - `GET /api/whoami` 对继承人多 `heir: {id, name, person, persona, gone}`，`admin` 为 false。
   - `HEIR_ALLOWED` 加了 `GET /api/whoami`、`POST /api/heir/open`、`POST /api/heir/leave`；其余照 P2.4。
 - **前端**：`features/heir`。`whoami` 带 `heir` 时整个页面只有 `HeirChat`（标题“X 的记忆延续”，下面一行“不是 X 本人”；以前的对话、新对话、离开），
   不读分身列表；本机存的“当前对话”等按 `twin.heir:<继承人>:<分身>:` 另存，和本人、别的继承人分开。个人版桌面侧栏底部一个 ghost 小按钮

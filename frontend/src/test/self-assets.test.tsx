@@ -152,6 +152,49 @@ it('hides synthesized voice trials when speech is disabled even with a saved voi
   );
 });
 
+it('shows what the person agrees to and posts each agreement and withdrawal for that material', async () => {
+  const consentTexts = {
+    portrait: '我同意用这张照片',
+    voice: '我同意用这段声音',
+  };
+  assets = {
+    ...owner,
+    consent: { portrait: false, voice: false },
+    consent_texts: consentTexts,
+  };
+  const posted: unknown[] = [];
+  const base = fetcher.getMockImplementation() as (
+    path: string,
+    init: RequestInit,
+  ) => Promise<Response>;
+  fetcher.mockImplementation((path: string, init: RequestInit) => {
+    if (path !== '/api/me/consent') return base(path, init);
+    const body = JSON.parse(String(init.body)) as { granted: boolean };
+    posted.push(body);
+    return Promise.resolve(json({ portrait: false, voice: body.granted }));
+  });
+  render(<SelfAssets />);
+  const voice = within(await screen.findByRole('region', { name: '声音' }));
+  expect(voice.getByText('我同意用这段声音')).toBeVisible();
+  const box = voice.getByRole('checkbox', { name: '同意用于 AI 合成' });
+  expect(box).not.toBeChecked();
+  // No portrait is stored, so there is nothing to agree to there.
+  expect(
+    within(screen.getByRole('region', { name: '形象' })).queryByRole(
+      'checkbox',
+    ),
+  ).not.toBeInTheDocument();
+  fireEvent.click(box);
+  await waitFor(() => expect(box).toBeChecked());
+  expect(voice.queryByText('我同意用这段声音')).not.toBeInTheDocument();
+  fireEvent.click(box);
+  await waitFor(() => expect(box).not.toBeChecked());
+  expect(posted).toEqual([
+    { kind: 'voice', granted: true },
+    { kind: 'voice', granted: false },
+  ]);
+});
+
 it('keeps photo and voice setup usable while speech capabilities are still loading', async () => {
   fetcher.mockImplementation((path: string) =>
     path === '/api/me/assets'

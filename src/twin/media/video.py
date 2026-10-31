@@ -19,8 +19,8 @@ from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from .clip import ffmpeg_path, label_metadata
-from .schema import MediaScript, VideoResult, VideoSegment
+from .clip import badge_margin, chinese_font, ffmpeg_path, label_metadata, synthesis_badge
+from .schema import SYNTHESIS_NOTICE, MediaScript, VideoResult, VideoSegment
 from .tts import MediaInputTooLong, MediaRejected, MediaTimeout, MediaUnavailable
 
 
@@ -79,6 +79,7 @@ class RemoteVideo:
         runner: Runner = run,
         portrait: Path | None = None,
         voice_ref: Path | None = None,
+        font_path: str | Path | None = None,
     ) -> None:
         if (
             host and (re.fullmatch(r"[A-Za-z0-9._-]{1,64}", host) is None or host.startswith("-"))
@@ -88,6 +89,7 @@ class RemoteVideo:
         self.timeout_s, self.max_rounds, self.max_cer, self.pause_s = timeout_s, max_rounds, max_cer, pause_s
         self.runner = runner
         self.portrait, self.voice_ref = portrait, voice_ref
+        self.font_path = font_path
 
     def _run(self, command: list[str], input: str | None = None) -> str:
         try:
@@ -126,6 +128,9 @@ class RemoteVideo:
             raise MediaRejected("没有可生成视频的内容")
         if sum(map(len, texts)) > 100_000:
             raise MediaInputTooLong("视频内容过长，请缩短回答")
+        # Said in the person's own voice, it first says it is synthesized (``schema.SYNTHESIS_NOTICE``).
+        if self.voice_ref is not None:
+            texts[0] = SYNTHESIS_NOTICE + texts[0]
         segments = [{"id": f"s{i:02d}", "text": text} for i, text in enumerate(texts, 1)]
         job_id = secrets.token_hex(16)
         request = {
@@ -142,6 +147,7 @@ class RemoteVideo:
             if asset is not None:
                 request[key] = self._asset(asset, extensions)
         ffmpeg = ffmpeg_path()
+        font = chinese_font(self.font_path)
         probe = shutil.which("ffprobe")
         if probe is None:
             raise MediaUnavailable("找不到 ffprobe，请安装 ffmpeg")
@@ -194,6 +200,9 @@ class RemoteVideo:
                         raise ValueError
                 except (ValueError, KeyError, IndexError, TypeError):
                     raise MediaUnavailable("远端视频文件无效，请检查任务输出") from None
+                badge = work / "badge.png"
+                synthesis_badge(font, height).save(badge)
+                margin = badge_margin(height)
                 self._run(
                     [
                         ffmpeg,
@@ -202,10 +211,12 @@ class RemoteVideo:
                         "-y",
                         "-i",
                         str(raw),
-                        "-vf",
-                        "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+                        "-i",
+                        str(badge),
+                        "-filter_complex",
+                        f"[0:v:0]pad=ceil(iw/2)*2:ceil(ih/2)*2[p];[p][1:v]overlay=W-w-{margin}:{margin}[v]",
                         "-map",
-                        "0:v:0",
+                        "[v]",
                         "-map",
                         "0:a:0",
                         "-map_metadata",

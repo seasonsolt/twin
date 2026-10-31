@@ -99,6 +99,7 @@ LAYERS: dict[str, int] = {
     "persona.observations": 4,
     "persona.self_ratings": 4,
     "persona.will": 4,
+    "persona.consent": 4,
     "persona.heirs": 4,
     "persona.heir_door": 4,
     "persona.retirement": 4,

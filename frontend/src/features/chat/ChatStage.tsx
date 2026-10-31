@@ -120,6 +120,9 @@ export function ChatStage({
   // The big portrait is a stage for the twin's voice and video; without either, a phone or tablet keeps the
   // compact bar and gives the height to the conversation.
   const media = !!(capabilities?.available || capabilities?.video?.available);
+  // Speech in the person's own voice is marked while it plays (docs/MEDIA.md); a video carries its own mark.
+  const ownVoice =
+    speaking && !!capabilities?.own_voice && !(url && videoPlaying);
   const compact = !panel && (collapsed || !media);
   const height = useSpring(desktop ? 470 : compact ? 96 : 360, springs.snappy);
   const size = useSpring(desktop ? 128 : compact ? 60 : 196, springs.snappy);
@@ -297,7 +300,7 @@ export function ChatStage({
                   )}
                   {url && videoPlaying && (
                     <span className="stage-video-chip">
-                      真人 ·{' '}
+                      AI 合成 ·{' '}
                       {Math.floor((videoState?.result?.duration_s ?? 0) / 60)}:
                       {String(
                         Math.round(videoState?.result?.duration_s ?? 0) % 60,
@@ -310,8 +313,11 @@ export function ChatStage({
                       aria-label="正在说话"
                       className="stage-speaking-chip"
                     >
-                      正在说
+                      {ownVoice ? '正在说 · AI 合成' : '正在说'}
                     </span>
+                  )}
+                  {!reduced && ownVoice && (
+                    <span className="stage-speaking-chip">AI 合成</span>
                   )}
                 </motion.button>
               ) : (

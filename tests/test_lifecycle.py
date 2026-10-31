@@ -92,6 +92,8 @@ SEALED = {
     ("DELETE", "/api/me/portrait"),
     ("PUT", "/api/me/voice"),
     ("DELETE", "/api/me/voice"),
+    # 合成同意：冻结后不再由谁替本人同意或撤回
+    ("POST", "/api/me/consent"),
     # 承诺账本
     ("POST", "/api/persona/ledger/build"),
     ("POST", "/api/persona/ledger/{entry_id}/review"),

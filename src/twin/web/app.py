@@ -29,6 +29,7 @@ from ..lenses import Lenses
 from ..media.tts import SpeechSynthesizer
 from ..persona import gate, lifecycle
 from ..persona.chat import keep_material_up_to
+from ..persona.consent import agreed_to
 from ..persona.gate import MemoryUpdating
 from ..persona.kernel import KERNEL, rebuild_scope
 from ..persona.lexical import keep_up_to
@@ -677,6 +678,7 @@ def create_app(
             tts_off=lambda: system_settings.off("tts"),
             video_off=lambda: system_settings.off("video"),
             generation=lambda: system_settings.generation,
+            agreed_to=lambda kind, key: agreed_to(resolved.db_path, kind, key),
         )
         return context
 

@@ -42,6 +42,11 @@ class AssetStore:
         path = self.directory / name
         return path.resolve() if path.is_file() and not path.is_symlink() else None
 
+    def content_key(self, kind: Literal["portrait", "voice"]) -> str | None:
+        """The SHA-256 of the stored portrait or voice, which the person's consent to synthesis is for."""
+        path = self.path(kind)
+        return path.stem if path is not None else None
+
     def update(self, kind: Literal["portrait", "voice"], entry: dict[str, Any] | None) -> dict[str, Any]:
         with _LOCK:
             self.prepare()

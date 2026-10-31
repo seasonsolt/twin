@@ -2318,6 +2318,8 @@ const handlers: Record<string, Handler> = {
     voice: null,
     speech_clone: false,
     video: false,
+    consent: { portrait: false, voice: false },
+    consent_texts: { portrait: '', voice: '' },
   }),
   'GET /api/persona/state': reply({ stale: false }),
   'GET /api/conversations': reply(history),

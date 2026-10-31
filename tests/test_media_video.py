@@ -24,7 +24,8 @@ from twin.cli import app as cli
 from twin.config import Settings, VideoSettings, egress_of, make_video_synthesizer
 from twin.egress import egress_status
 from twin.media.adapters import presentable_from_payload
-from twin.media.schema import MediaScript, Segment, VideoResult, VideoSegment
+from twin.media.clip import badge_margin
+from twin.media.schema import SYNTHESIS_NOTICE, MediaScript, Segment, VideoResult, VideoSegment
 from twin.media.script import script_from_presentable
 from twin.media.tts import MediaRejected, MediaTimeout, MediaUnavailable
 from twin.media.video import RemoteVideo, run
@@ -369,6 +370,8 @@ def test_real_postprocess_metadata_and_contract(tmp_path: Path) -> None:
         image = Image.frombytes("RGB", (640, 360), pixels)
         assert min(image.getpixel((20, 335))) > 240
         assert min(image.getpixel((20, 20))) > 240
+        # The "AI 合成" badge darkens the top right corner of every frame (P3.3).
+        assert max(image.getpixel((640 - badge_margin(360) - 3, badge_margin(360) + 8))) < 200
 
 
 @pytest.mark.parametrize("abstain", [False, True])
@@ -383,9 +386,9 @@ def test_web_job_flow_streaming_and_abstention(tmp_path: Path, abstain: bool) ->
             return VideoResult(output=out_path, duration_s=1.0, warnings=["s02: cer=0.1"])
 
     app = FastAPI()
-    register(app, Settings(db_path=tmp_path / "twin.db"), video_factory=lambda: Synth())
+    register(app, Settings(db_path=tmp_path / "twin.db"), video_factory=lambda own: Synth())
     with TestClient(app) as client:
-        assert client.get("/api/media/capabilities").json()["video"] == {"available": True}
+        assert client.get("/api/media/capabilities").json()["video"] == {"available": True, "own": False}
         empty = {**SOURCE, "reply": "  ", "abstain": abstain}
         assert client.post("/api/media/video", json={**BODY, "answer": empty}).status_code == 400
         response = client.post("/api/media/video", json={**BODY, "answer": {**SOURCE, "abstain": abstain}})
@@ -425,7 +428,7 @@ def test_disabled_web_and_failed_jobs_are_generic(tmp_path: Path, caplog: pytest
             raise ValueError(SECRET)
 
     app = FastAPI()
-    register(app, Settings(db_path=tmp_path / "twin.db"), video_factory=lambda: BadSynth())
+    register(app, Settings(db_path=tmp_path / "twin.db"), video_factory=lambda own: BadSynth())
     with TestClient(app) as client:
         job_id = client.post("/api/media/video", json=BODY).json()["job_id"]
         for _ in range(100):
@@ -527,6 +530,24 @@ def test_video_factory_uses_stored_assets(tmp_path: Path) -> None:
     synth = make_video_synthesizer(settings)
     assert isinstance(synth, RemoteVideo)
     assert synth.portrait == store.path("portrait") and synth.voice_ref == store.path("voice")
+    # Without the person's consent, neither (the driver's preset ones).
+    synth = make_video_synthesizer(settings, own=False)
+    assert isinstance(synth, RemoteVideo) and synth.portrait is None and synth.voice_ref is None
+
+
+def test_a_video_in_the_persons_own_voice_first_says_it_is_synthesized(dependencies: None, tmp_path: Path) -> None:
+    voice = tmp_path / "self.wav"
+    voice.write_bytes(b"RIFF")
+    sent: list[dict[str, Any]] = []
+
+    def runner(command: list[str], *, input: str | None, timeout: float) -> subprocess.CompletedProcess[str]:
+        sent.append(json.loads(input or "{}"))
+        return subprocess.CompletedProcess(command, 0, '{"ok": false, "error": "stop here"}', "")
+
+    for voice_ref, first in ((None, script().segments[0].text), (voice, SYNTHESIS_NOTICE + script().segments[0].text)):
+        with pytest.raises(MediaRejected):
+            RemoteVideo(command="driver", runner=runner, voice_ref=voice_ref).synthesize(script(), tmp_path / "o.mp4")
+        assert sent[-1]["segments"][0]["text"] == first
 
 
 def test_cli_reports_only_ids_and_cer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -50,12 +50,12 @@ def script() -> MediaScript:
 @pytest.fixture
 def font() -> Path:
     try:
-        return clip._font_path(None)
+        return clip.chinese_font(None)
     except MediaError:
         pytest.skip("Chinese font not installed")
 
 
-def test_frames_are_deterministic_and_have_no_badge(font: Path) -> None:
+def test_frames_are_deterministic_and_carry_only_the_synthesis_badge(font: Path) -> None:
     avatar = AVATAR_PRESETS["chestnut"]
     hashes = []
     for level in range(4):
@@ -73,6 +73,12 @@ def test_frames_are_deterministic_and_have_no_badge(font: Path) -> None:
         image = clip._draw_frame(avatar, text, 0, font, (1280, 720), card=card)
         region = image.crop((25, 25, 500, 65))
         assert all(pixel == background for pixel in region.get_flattened_data())
+        # "AI 合成" in the top right corner of every frame, the card too (P3.3).
+        badge = clip.synthesis_badge(font, 720)
+        margin = clip.badge_margin(720)
+        corner = image.crop((1280 - margin - badge.width, margin, 1280 - margin, margin + badge.height))
+        assert any(pixel != background for pixel in corner.get_flattened_data())
+        assert image.getpixel((1280 - margin - 3, margin + badge.height // 2)) != background
     abstention = clip._draw_frame(avatar, "资料不足。", 0, font, (1280, 720), show_avatar=False)
     assert abstention.getpixel((200, 400)) == background
 
@@ -93,13 +99,13 @@ def test_missing_ffmpeg_is_chinese_and_does_not_synthesize(monkeypatch: pytest.M
 def test_font_candidates(monkeypatch: pytest.MonkeyPatch, filename: str) -> None:
     monkeypatch.setattr(Path, "is_file", lambda path: str(path) == filename)
     monkeypatch.setattr(clip.shutil, "which", lambda _: pytest.fail("candidate must precede fc-match"))
-    assert clip._font_path(None) == Path(filename)
+    assert clip.chinese_font(None) == Path(filename)
 
 
 def test_explicit_font_precedes_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(Path, "is_file", lambda _: True)
     monkeypatch.setattr(clip.shutil, "which", lambda _: pytest.fail("explicit font must precede fc-match"))
-    assert clip._font_path("~/chosen.ttc") == Path("~/chosen.ttc").expanduser()
+    assert clip.chinese_font("~/chosen.ttc") == Path("~/chosen.ttc").expanduser()
 
 
 @pytest.mark.parametrize("first", ["valid", "missing", "empty", "directory", "timeout", "error", "oserror"])
@@ -126,7 +132,7 @@ def test_fontconfig_discovery(monkeypatch: pytest.MonkeyPatch, first: str) -> No
         return subprocess.CompletedProcess(command, 0, stdout=output)
 
     monkeypatch.setattr(clip.subprocess, "run", run)
-    assert clip._font_path(None) == Path("/fonts/cjk.ttc" if first == "valid" else "/fonts/fallback.ttc")
+    assert clip.chinese_font(None) == Path("/fonts/cjk.ttc" if first == "valid" else "/fonts/fallback.ttc")
     assert calls == [
         ["/bin/fc-match", "-f", "%{file}", pattern]
         for pattern in (
@@ -148,7 +154,7 @@ def test_fontconfig_without_existing_fonts(monkeypatch: pytest.MonkeyPatch, avai
 
     monkeypatch.setattr(clip.subprocess, "run", run)
     with pytest.raises(MediaError, match="找不到中文字体"):
-        clip._font_path(None)
+        clip.chinese_font(None)
     assert len(calls) == (2 if available else 0)
 
 
@@ -158,7 +164,7 @@ def test_missing_font_is_chinese(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     with pytest.raises(MediaError, match=r"找不到中文字体.*\[media\] font_path"):
         clip.render_clip(script(), SilentSynthesizer(), AVATAR_PRESETS["chestnut"], tmp_path / "clip.mp4")
     with pytest.raises(MediaError, match="font_path"):
-        clip._font_path(tmp_path / "absent.ttf")
+        clip.chinese_font(tmp_path / "absent.ttf")
 
 
 def test_invalid_font_and_excessive_text_fail_before_synthesis(

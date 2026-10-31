@@ -20,6 +20,7 @@ from pillow_heif import from_pillow
 from twin.assets import AssetStore
 from twin.config import AvatarSettings, Settings, TTSSettings, load_settings
 from twin.media.schema import SpeechRequest, SpeechResult, SynthCapabilities, VoiceSpec
+from twin.persona import consent
 from twin.web.app import create_app
 from twin.web.assets import read_upload
 
@@ -74,6 +75,8 @@ def test_portrait_profile_crop_metadata_permissions_and_fallbacks(tmp_path: Path
             "voice": None,
             "speech_clone": False,
             "video": False,
+            "consent": {"voice": False, "portrait": False},
+            "consent_texts": consent.TEXTS,
         }
         assert web.get("/api/media/avatar-image").content == fallback.read_bytes()
         response = web.put("/api/me/portrait", files={"file": ("self.png", image(), "image/png")}, headers=HEADERS)
@@ -322,17 +325,33 @@ def test_effective_voice_cache_changes_and_preset_fallback(tmp_path: Path) -> No
     store = AssetStore(settings.db_path)
     with TestClient(create_app(settings, synthesizer_factory=Synth), base_url="http://localhost") as web:
         initial = web.post("/api/media/audio", json=BODY, headers=HEADERS).json()
+
+        def spoken() -> str:
+            return str(web.post("/api/media/audio", json=BODY, headers=HEADERS).json()["manifest"]["voice"]["voice_id"])
+
+        def agree() -> None:
+            agreed = web.post("/api/me/consent", json={"kind": "voice", "granted": True}, headers=HEADERS)
+            assert agreed.status_code == 200 and agreed.json()["voice"]
+
+        # A voice of the person's own speaks only once they agreed to it, and a new recording asks again.
         first_voice = store.save("voice", audio(6), 6)["voice"]["id"]
+        assert spoken() == "preset"
+        agree()
         first = web.post("/api/media/audio", json=BODY, headers=HEADERS).json()
         second_voice = store.save("voice", audio(7), 7)["voice"]["id"]
+        assert spoken() == "preset"
+        agree()
         second = web.post("/api/media/audio", json=BODY, headers=HEADERS).json()
         web.post("/api/media/audio", json=BODY, headers=HEADERS)
-        assert calls == ["preset", first_voice, second_voice]
-        assert len({reply["segments"][0]["url"] for reply in (initial, first, second)}) == 3
+        # The notice and the answer, in each of the person's voices.
+        assert calls == ["preset", first_voice, first_voice, second_voice, second_voice]
+        # Its first part says it is synthesized; the preset voice's does not.
+        assert len(first["segments"]) == len(initial["segments"]) + 1 == len(second["segments"])
+        assert len({reply["segments"][-1]["url"] for reply in (initial, first, second)}) == 3
         assert second["manifest"]["voice"]["voice_id"] == second_voice
         store.update("voice", None)
         assert web.post("/api/media/audio", json=BODY, headers=HEADERS).json()["segments"] == initial["segments"]
-        assert len(calls) == 3
+        assert len(calls) == 5
         # Stored references remain available for video even without speech cloning configured.
         store.save("voice", audio(6), 6)
         settings.tts.voice_dir = None

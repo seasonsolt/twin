@@ -10,6 +10,7 @@ import {
   AvatarFrame,
   Button,
   Card,
+  Checkbox,
   FileInput,
   Heading,
   MediaFrame,
@@ -29,9 +30,13 @@ interface Profile {
   portrait: { sha: string; file: string } | null;
   voice: { id: string; file: string; duration_s: number } | null;
 }
+type Kind = 'portrait' | 'voice';
 interface Assets extends Profile {
   speech_clone: boolean;
   video: boolean;
+  /** Whether the person agreed to synthesis with this very portrait or voice. */
+  consent: Record<Kind, boolean>;
+  consent_texts: Record<Kind, string>;
 }
 
 export function uploadAsset(
@@ -185,7 +190,23 @@ export function SelfAssets({
 
   const changed = async (next: Profile, signal: AbortSignal) => {
     if (signal.aborted) return;
-    setProfile((current) => (current ? { ...current, ...next } : null));
+    // A new photo or recording needs agreeing to again (the server keeps agreements per file).
+    setProfile((current) =>
+      current
+        ? {
+            ...current,
+            ...next,
+            consent: {
+              portrait:
+                !!current.consent?.portrait &&
+                current.portrait?.sha === next.portrait?.sha,
+              voice:
+                !!current.consent?.voice &&
+                current.voice?.id === next.voice?.id,
+            },
+          }
+        : null,
+    );
     window.dispatchEvent(new Event(ASSETS_CHANGED));
     try {
       const nextCaps = await api<Capabilities>('/api/media/capabilities', {
@@ -320,6 +341,42 @@ export function SelfAssets({
       await changed(next, signal);
       if (kind === 'voice' && !signal.aborted) setSample(null);
     });
+  const consent = (kind: Kind, granted: boolean) =>
+    void operation(
+      kind,
+      granted ? '正在保存…' : '正在撤回…',
+      async (signal) => {
+        const agreed = await api<Record<Kind, boolean>>('/api/me/consent', {
+          method: 'POST',
+          signal,
+          json: { kind, granted },
+        });
+        if (signal.aborted || !profile) return;
+        setProfile((current) =>
+          current ? { ...current, consent: agreed } : null,
+        );
+        await changed(
+          { portrait: profile.portrait, voice: profile.voice },
+          signal,
+        );
+      },
+    );
+  const consentBox = (kind: Kind) =>
+    profile?.[kind] && (
+      <div className="space-y-1">
+        <Checkbox
+          label="同意用于 AI 合成"
+          checked={!!profile.consent?.[kind]}
+          disabled={disabled}
+          onChange={(event) => consent(kind, event.currentTarget.checked)}
+        />
+        {!profile.consent?.[kind] && (
+          <Text size="sm" tone="secondary">
+            {profile.consent_texts?.[kind]}
+          </Text>
+        )}
+      </div>
+    );
   const currentPortrait = profile?.portrait
     ? personaUrl(`/api/media/avatar-image?v=${profile.portrait.sha}`)
     : caps?.avatar_image?.url
@@ -410,6 +467,7 @@ export function SelfAssets({
             }
           }}
         />
+        {consentBox('portrait')}
         <Text size="sm" tone="secondary">
           正脸、光线均匀、头肩入镜效果最好
         </Text>
@@ -534,6 +592,7 @@ export function SelfAssets({
             </Button>
           )}
         </Row>
+        {consentBox('voice')}
         <FileInput
           ref={voiceInput}
           label="选择录音或视频"

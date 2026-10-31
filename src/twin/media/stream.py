@@ -12,7 +12,7 @@ import numpy as np
 
 from ..util import fingerprint, private_directory
 from .render import _cached_speech, _speech_parts, _write_private
-from .schema import MediaScript, SpeechRequest
+from .schema import SYNTHESIS_NOTICE, MediaScript, SpeechRequest
 from .speech_text import SPEECH_SEGMENT_VERSION, SPEECH_TEXT_VERSION
 from .tts import CloudflareMeloTTS, MediaUnavailable, OpenAICompatSpeech, SpeechSynthesizer, wav_pcm
 
@@ -99,7 +99,7 @@ async def stream_audio(script: MediaScript, synth: SpeechSynthesizer, cache_dir:
     private_directory(directory)
     key = fingerprint(
         {
-            "stream_version": 1,
+            "stream_version": 2,
             "identity": synth.identity,
             "voice": synth.voice.model_dump(mode="json"),
             "segments": [segment.model_dump(mode="json") for segment in script.segments],
@@ -119,11 +119,16 @@ async def stream_audio(script: MediaScript, synth: SpeechSynthesizer, cache_dir:
         raise MediaUnavailable("Speech backend declares no audio formats")
     assembled = bytearray()
     size = 0
+    # The person's own voice says it is synthesized before anything else (``schema.SYNTHESIS_NOTICE``).
+    notice = synth.voice.own
     for segment in script.segments:
         meta = frame(1, {"segment": segment.index, "caption": segment.text})
         assembled.extend(meta)
         yield meta
-        for _, spoken in _speech_parts(segment.text, synth.voice.language, capabilities):
+        spoken_parts = _speech_parts(segment.text, synth.voice.language, capabilities)
+        if notice:
+            spoken_parts, notice = [(SYNTHESIS_NOTICE, SYNTHESIS_NOTICE), *spoken_parts], False
+        for _, spoken in spoken_parts:
             request = SpeechRequest(text=spoken, voice=synth.voice, audio_format=capabilities.audio_formats[0])
             chunks = (
                 synth.stream_pcm(request)

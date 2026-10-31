@@ -120,6 +120,18 @@ BEGIN SELECT RAISE(ABORT, 'p_heir_log is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS p_heir_log_no_delete BEFORE DELETE ON p_heir_log
 BEGIN SELECT RAISE(ABORT, 'p_heir_log is append-only'); END;
 """
+# 合成同意 (``persona.consent``): each time the person agreed to, or withdrew, their own voice or portrait being used to
+# synthesize speech or video, with the material's content key and the words they agreed to; written once, never
+# changed or deleted.
+_CONSENT = """
+CREATE TABLE IF NOT EXISTS p_media_consent (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, kind TEXT NOT NULL, content_key TEXT NOT NULL,
+    granted INTEGER NOT NULL, text TEXT NOT NULL);
+CREATE TRIGGER IF NOT EXISTS p_media_consent_no_update BEFORE UPDATE ON p_media_consent
+BEGIN SELECT RAISE(ABORT, 'p_media_consent is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS p_media_consent_no_delete BEFORE DELETE ON p_media_consent
+BEGIN SELECT RAISE(ABORT, 'p_media_consent is append-only'); END;
+"""
 _MIGRATIONS: tuple[str, ...] = (
     _SCHEMA,
     # 2: per-chunk extraction counts (``ExtractStats`` JSON); NULL for chunks extracted before it.
@@ -145,6 +157,8 @@ _MIGRATIONS: tuple[str, ...] = (
     _WILL,
     # 10: 继承人开启 (``persona.heir_door``).
     _HEIR_DOOR,
+    # 11: 合成同意 (``persona.consent``).
+    _CONSENT,
 )
 
 
@@ -1311,6 +1325,20 @@ class PersonaStore:
         """One more line of the heirs' log (``persona.heir_door``): when, which heir (none for a wrong try), what."""
         with self._tx() as db:
             db.execute("INSERT INTO p_heir_log (at, heir_id, event) VALUES (?, ?, ?)", (at, heir_id, event))
+
+    def add_consent(self, at: str, kind: str, content_key: str, granted: bool, text: str) -> None:
+        """One more line of the synthesis consents (``persona.consent``): agreed to, or withdrawn."""
+        with self._tx() as db:
+            db.execute(
+                "INSERT INTO p_media_consent (at, kind, content_key, granted, text) VALUES (?, ?, ?, ?, ?)",
+                (at, kind, content_key, int(granted), text),
+            )
+
+    def consents(self) -> list[tuple[str, str, str, bool, str]]:
+        """Every consent given or withdrawn, oldest first: when, for which kind and material, whether, and the words."""
+        with self._lock:
+            rows = self._db.execute("SELECT at, kind, content_key, granted, text FROM p_media_consent ORDER BY id")
+            return [(at, kind, key, bool(granted), text) for at, kind, key, granted, text in rows]
 
     def heir_log(self) -> list[tuple[str, str, str]]:
         """The heirs' log, oldest first: when, which heir, what."""

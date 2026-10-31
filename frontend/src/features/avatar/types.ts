@@ -8,7 +8,9 @@ export interface AvatarSpec {
 
 export interface Capabilities {
   available: boolean;
-  video?: { available: boolean; asset_key?: string };
+  video?: { available: boolean; own?: boolean; asset_key?: string };
+  /** Speech is made with the person's own voice, which they agreed to; its audio then says it is AI first. */
+  own_voice?: boolean;
   backend: string | null;
   avatar?: AvatarSpec;
   avatar_preset?: string;

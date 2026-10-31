@@ -701,8 +701,9 @@ def make_synthesizer(s: TTSSettings) -> SpeechSynthesizer:
     )
 
 
-def make_video_synthesizer(settings: Settings) -> VideoSynthesizer | None:
-    """Lazy presentation factory; no remote work is performed during construction."""
+def make_video_synthesizer(settings: Settings, *, own: bool = True) -> VideoSynthesizer | None:
+    """Lazy presentation factory; no remote work is performed during construction. ``own``: whether the person's
+    portrait and voice may be used (they agreed to it, ``persona.consent``); otherwise the driver's preset ones."""
     if settings.video.provider == "none":
         return None
     from .media.video import RemoteVideo
@@ -712,7 +713,7 @@ def make_video_synthesizer(settings: Settings) -> VideoSynthesizer | None:
     from .assets import AssetStore
 
     assets = AssetStore(settings.db_path)
-    portrait, voice_ref = assets.path("portrait"), assets.path("voice")
+    portrait, voice_ref = (assets.path("portrait"), assets.path("voice")) if own else (None, None)
     if video.require_assets and (portrait is None or voice_ref is None):
         from .media.tts import MediaUnavailable
 
@@ -726,6 +727,7 @@ def make_video_synthesizer(settings: Settings) -> VideoSynthesizer | None:
         max_rounds=video.max_rounds,
         max_cer=video.max_cer,
         pause_s=video.pause_s,
+        font_path=settings.media.font_path,
     )
 
 

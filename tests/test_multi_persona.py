@@ -49,6 +49,13 @@ def headers(persona_id: str) -> dict[str, str]:
     return {**CSRF, "X-Twin-Persona": persona_id}
 
 
+def agree(web: TestClient, persona_id: str) -> None:
+    """The persona agrees to synthesis with its stored portrait and voice (``persona.consent``)."""
+    for kind in ("portrait", "voice"):
+        response = web.post("/api/me/consent", json={"kind": kind, "granted": True}, headers=headers(persona_id))
+        assert response.status_code == 200, response.text
+
+
 def create(web: TestClient, name: str = "另一个人") -> str:
     response = web.post("/api/personas", json={"name": name}, headers=CSRF)
     assert response.status_code == 201, response.text
@@ -303,7 +310,7 @@ def test_non_default_fallbacks_and_preset_voice(tmp_path: Path, monkeypatch: pyt
         assert web.get("/api/media/capabilities").json()["video"]["available"]
         capabilities = web.get("/api/media/capabilities", headers=headers(persona)).json()
         assert capabilities["avatar_image"] is None
-        assert capabilities["video"] == {"available": False, "reason": "先在「关于你」上传形象和声音"}
+        assert capabilities["video"] == {"available": False, "own": False, "reason": "先在「关于你」上传形象和声音"}
         assert web.post("/api/media/video", json=MEDIA, headers=headers(persona)).status_code == 503
         audio = web.post("/api/media/audio", json=MEDIA, headers=headers(persona)).json()
         assert audio["manifest"]["voice"]["voice_id"] == "preset"
@@ -311,11 +318,14 @@ def test_non_default_fallbacks_and_preset_voice(tmp_path: Path, monkeypatch: pyt
         assets.save("portrait", picture.read_bytes())
         assert not web.get("/api/media/capabilities", headers=headers(persona)).json()["video"]["available"]
         assets.save("voice", b"other reference", 6)
+        assert not web.get("/api/media/capabilities", headers=headers(persona)).json()["video"]["available"]
+        agree(web, persona)
         assert web.get("/api/media/capabilities", headers=headers(persona)).json()["video"]["available"]
         assert (
             web.post("/api/media/audio", json=MEDIA, headers=headers(persona)).json()["manifest"]["voice"]["voice_id"]
             != "preset"
         )
+        assert web.post("/api/me/consent", json={"kind": "voice", "granted": True}, headers=CSRF).status_code == 200
         default_audio = web.post("/api/media/audio", json=MEDIA, headers=CSRF)
         assert default_audio.status_code == 200, default_audio.text
         assert default_audio.json()["manifest"]["voice"]["voice_id"] != "preset"
@@ -439,11 +449,12 @@ def test_video_jobs_cannot_be_read_or_deleted_from_another_persona(
             out_path.write_bytes(b"private video")
             return VideoResult(output=out_path, duration_s=1, warnings=[])
 
-    def factory(resolved: Settings) -> Video:
+    def factory(resolved: Settings, own: bool = True) -> Video:
         captured.append(resolved.db_path)
         return Video()
 
     monkeypatch.setattr("twin.web.media.make_video_synthesizer", factory)
+    agree(web, a)
     result = web.post("/api/media/video", json=MEDIA, headers=headers(a))
     assert result.status_code == 200, result.text
     job_id = result.json()["job_id"]
@@ -469,11 +480,12 @@ def test_video_asset_removal_race_never_selects_driver_defaults(
     assets.save("portrait", b"own portrait")
     assets.save("voice", b"own voice", 6)
 
-    def removed(resolved: Settings) -> Any:
+    def removed(resolved: Settings, own: bool = True) -> Any:
         assets.update("portrait", None)
-        return make_video_synthesizer(resolved)
+        return make_video_synthesizer(resolved, own=own)
 
     monkeypatch.setattr("twin.web.media.make_video_synthesizer", removed)
+    agree(web, persona)
     response = web.post("/api/media/video", json=MEDIA, headers=headers(persona))
     assert response.status_code == 503
     assert response.json()["detail"] == "先在「关于你」上传形象和声音"

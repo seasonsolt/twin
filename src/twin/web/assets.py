@@ -21,12 +21,14 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pillow_heif import register_heif_opener
+from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
 from ..assets import AssetStore
 from ..config import Settings
 from ..media.clip import ffmpeg_path
 from ..media.tts import MediaUnavailable
+from ..persona import consent
 from ..persona.store import AVATAR_CHOSEN, PersonaStore
 
 register_heif_opener()
@@ -283,9 +285,19 @@ def voice(path: Path, directory: Path) -> tuple[bytes, float]:
         return clean.getvalue(), duration
 
 
+class ConsentBody(BaseModel):
+    kind: consent.Kind
+    granted: bool
+
+
 def register(app: FastAPI, settings: Settings, on_voice: Callable[[], object] | None = None) -> None:
     """``on_voice`` runs after a new voice is saved, so recordings are compared with it."""
     store = AssetStore(settings.db_path)
+
+    def agreed() -> dict[str, bool]:
+        """For the stored voice and portrait, whether the person agreed to synthesis with it (``persona.consent``)."""
+        with PersonaStore(settings.db_path) as persona:
+            return {kind: consent.consented(persona, kind, store.content_key(kind)) for kind in consent.TEXTS}
 
     @app.get("/api/me/assets")
     def assets() -> dict[str, Any]:
@@ -293,7 +305,19 @@ def register(app: FastAPI, settings: Settings, on_voice: Callable[[], object] | 
             **store.profile(),
             "speech_clone": settings.tts.voice_dir is not None,
             "video": settings.video.provider == "remote",
+            "consent": agreed(),
+            "consent_texts": consent.TEXTS,
         }
+
+    @app.post("/api/me/consent")
+    def set_consent(body: ConsentBody) -> dict[str, bool]:
+        """The person agrees to, or withdraws, the use of their stored voice or portrait in synthesis; kept for good."""
+        key = store.content_key(body.kind)
+        if key is None:
+            raise HTTPException(404, "还没有保存自己的声音" if body.kind == "voice" else "还没有保存自己的照片")
+        with PersonaStore(settings.db_path) as persona:
+            (consent.give if body.granted else consent.withdraw)(persona, body.kind, key)
+        return agreed()
 
     @app.put("/api/me/portrait")
     async def put_portrait(

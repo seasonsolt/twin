@@ -417,7 +417,7 @@ it('reply icons speak on the stage, update live captions and rings, and play a r
   expect(player).toHaveAttribute('playsinline');
   expect(player).toHaveClass('object-cover');
   expect(audio).not.toHaveAttribute('src');
-  expect(screen.getByText('真人 · 0:06')).toBeVisible();
+  expect(screen.getByText('AI 合成 · 0:06')).toBeVisible();
   expect(reply.querySelector('video, img')).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: '打开真人视频全屏' }));
   expect(screen.getByRole('dialog', { name: '真人版' })).toBeVisible();

@@ -71,7 +71,7 @@ AudioFormat = Literal["wav", "mp3"]
 
 
 class VoiceSpec(BaseModel):
-    """A preset voice, never a cloned identity."""
+    """A preset voice, or the person's own once they agreed to it (``own``)."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -79,6 +79,16 @@ class VoiceSpec(BaseModel):
     voice_id: str = "default"
     language: str = "zh"
     label: str = "Preset voice"
+
+    @property
+    def own(self) -> bool:
+        """Whether this is the person's own voice, cloned from their recording (``assets.AssetStore.publish_voice``)."""
+        return self.voice_id.startswith("self-")
+
+
+# Said first in every audio made with the person's own voice (docs/PRODUCT_PERSONA_AGENT.md P3.3), so that a voice of
+# theirs says what it is before it says anything else.
+SYNTHESIS_NOTICE = "以下为 AI 合成。"
 
 
 class SpeechRequest(BaseModel):

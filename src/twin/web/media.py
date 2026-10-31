@@ -108,7 +108,7 @@ def register(
     app: FastAPI,
     settings: Settings,
     synthesizer_factory: Callable[[], SpeechSynthesizer] | None = None,
-    video_factory: Callable[[], VideoSynthesizer | None] | None = None,
+    video_factory: Callable[[bool], VideoSynthesizer | None] | None = None,
     *,
     jobs: JobManager | None = None,
     name_factory: Callable[[], str] | None = None,
@@ -116,10 +116,13 @@ def register(
     tts_off: Callable[[], bool] = lambda: False,
     video_off: Callable[[], bool] = lambda: False,
     generation: Callable[[], int] = lambda: 0,
+    agreed_to: Callable[[Literal["portrait", "voice"], str], bool] = lambda kind, key: False,
 ) -> None:
     """Register under the application's existing security middleware with lazy speech. ``tts_off`` /
     ``video_off`` say whether an administrator switched speech or video off; checked on every request.
-    ``generation`` changes when an administrator changes a key, and the speech client is built again."""
+    ``generation`` changes when an administrator changes a key, and the speech client is built again. ``agreed_to``
+    says whether the person agreed to synthesis with their portrait or voice of that content key (``persona.consent``);
+    without it, speech and video use the preset ones."""
     app.add_middleware(PrivateAudioMiddleware)
     cache_dir = settings.db_path.parent / "media-cache"
     assets = AssetStore(settings.db_path)
@@ -129,12 +132,22 @@ def register(
     built_generation = 0
     lock = threading.Lock()
     video_jobs = jobs or JobManager(1, lambda _: "视频生成失败，请检查 [video] 和 ffmpeg 配置")
-    video = video_factory or (lambda: make_video_synthesizer(settings))
+    video = video_factory or (lambda own: make_video_synthesizer(settings, own=own))
     video_available = video_factory is not None or settings.video.provider == "remote"
     allow_video_fallback = not settings.video.require_assets
 
+    def agreed(kind: Literal["portrait", "voice"]) -> bool:
+        """Whether the person agreed to synthesis with their stored portrait or voice (``persona.consent``)."""
+        key = assets.content_key(kind)
+        return key is not None and agreed_to(kind, key)
+
     def own_video_assets() -> bool:
-        return assets.path("portrait") is not None and assets.path("voice") is not None
+        return agreed("portrait") and agreed("voice")
+
+    def missing_reason() -> str:
+        if assets.path("portrait") is None or assets.path("voice") is None:
+            return "先在「关于你」上传形象和声音"
+        return "先在「关于你」同意用你的形象和声音"
 
     def speech() -> SpeechSynthesizer:
         nonlocal synthesizer, selected_voice, built_generation
@@ -142,7 +155,9 @@ def register(
             raise SpeechSwitchedOff
         with lock:
             try:
-                voice_id = assets.publish_voice(settings.tts.voice_dir) or settings.tts.voice
+                # The person's own voice only once they agreed to it; the preset voice otherwise.
+                own = assets.publish_voice(settings.tts.voice_dir) if agreed("voice") else None
+                voice_id = own or settings.tts.voice
                 if synthesizer is None or voice_id != selected_voice or generation() != built_generation:
                     if synthesizer_factory is None:
                         synthesizer = make_synthesizer(settings.tts.model_copy(update={"voice": voice_id}))
@@ -203,11 +218,17 @@ def register(
             else None
         )
         profile = assets.profile()
-        asset_key = f"{portrait['sha'] if portrait else ''}:{profile['voice']['id'] if profile['voice'] else ''}"
-        missing_assets = not allow_video_fallback and not own_video_assets()
+        own_voice, own = agreed("voice"), own_video_assets()
+        # Agreeing or withdrawing changes which voice and figure a video is made with, so it changes the key too.
+        asset_key = (
+            f"{portrait['sha'] if portrait else ''}:{profile['voice']['id'] if profile['voice'] else ''}"
+            f":{int(agreed('portrait'))}{int(own_voice)}"
+        )
+        missing_assets = not allow_video_fallback and not own
         video_capability = {
             "available": video_available and not missing_assets and not video_off(),
-            **({"reason": "先在「关于你」上传形象和声音"} if missing_assets else {}),
+            "own": own,
+            **({"reason": missing_reason()} if missing_assets else {}),
             **({"asset_key": asset_key} if portrait or profile["voice"] else {}),
         }
         try:
@@ -234,6 +255,7 @@ def register(
             "avatar_model": avatar_model,
             "avatar_image": avatar_image,
             "video": video_capability,
+            "own_voice": own_voice,
             "available": synth.name != "silent",
             "backend": synth.name,
             "languages": declared.languages,
@@ -373,18 +395,19 @@ def register(
         script = make_script(body)
         if not script.segments:
             raise HTTPException(400, "没有可生成视频的内容")
-        if not allow_video_fallback and not own_video_assets():
-            raise HTTPException(503, "先在「关于你」上传形象和声音")
+        own = own_video_assets()
+        if not allow_video_fallback and not own:
+            raise HTTPException(503, missing_reason())
         if not video_available:
             raise HTTPException(503, "视频未配置，请设置 [video]")
         if video_off():
             raise HTTPException(503, "管理员已关闭视频")
         # Capture references before the job starts; later asset edits cannot select driver fallbacks.
         try:
-            synth = video()
+            synth = video(own)
         except MediaUnavailable:
             if not allow_video_fallback:
-                raise HTTPException(503, "先在「关于你」上传形象和声音") from None
+                raise HTTPException(503, missing_reason()) from None
             raise
 
         def generate(log: Callable[[str], None]) -> dict[str, Any]:

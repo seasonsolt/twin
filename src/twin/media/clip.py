@@ -24,9 +24,11 @@ FONT_PATHS = (
     "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
 )
 ENDING_SECONDS = 3
+# Shown in a corner of every frame of every video (docs/PRODUCT_PERSONA_AGENT.md P3.3), and so in every exported file.
+SYNTHESIS_BADGE = "AI 合成"
 
 
-def _font_path(font_path: str | Path | None) -> Path:
+def chinese_font(font_path: str | Path | None) -> Path:
     candidates = [Path(font_path).expanduser()] if font_path is not None else [Path(p) for p in FONT_PATHS]
     for path in candidates:
         if path.is_file():
@@ -126,6 +128,23 @@ def label_metadata(script: MediaScript) -> list[str]:
     ]
 
 
+def synthesis_badge(font_path: Path, height: int) -> Image.Image:
+    """The "AI 合成" badge for a video ``height`` pixels high: white text on a dark, half-opaque rounded box."""
+    size = max(12, round(height * 0.035))
+    font = ImageFont.truetype(str(font_path), size)
+    left, top, right, bottom = (math.ceil(n) for n in font.getbbox(SYNTHESIS_BADGE))
+    pad = size // 2
+    badge = Image.new("RGBA", (right - left + 2 * pad, bottom - top + 2 * pad), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(badge)
+    draw.rounded_rectangle((0, 0, badge.width - 1, badge.height - 1), radius=pad, fill=(0, 0, 0, 150))
+    draw.text((pad - left, pad - top), SYNTHESIS_BADGE, font=font, fill=(255, 255, 255, 255))
+    return badge
+
+
+def badge_margin(height: int) -> int:
+    return max(8, round(height * 0.03))
+
+
 def _draw_frame(
     avatar: AvatarSpec,
     text: str,
@@ -151,6 +170,9 @@ def _draw_frame(
             break
         font_size -= 1
     draw.multiline_text((left, top), "\n".join(lines), font=font, fill=avatar.palette["hair"], spacing=font_size // 2)
+    badge = synthesis_badge(font_path, height)
+    margin = badge_margin(height)
+    image.paste(badge, (width - badge.width - margin, margin), badge)
     return image
 
 
@@ -173,7 +195,7 @@ def render_clip(
     fps: int = 25,
 ) -> Path:
     ffmpeg = ffmpeg_path()
-    font = _font_path(font_path)
+    font = chinese_font(font_path)
     if fps <= 0 or any(n <= 0 or n % 2 for n in size):
         raise MediaError("视频尺寸须为正偶数，帧率须为正数")
     if sum(len(segment.text) for segment in script.segments) > 100_000:

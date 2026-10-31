@@ -87,6 +87,22 @@ Positioning: Identity → Memory upload → Service. Repository, project, Python
 - **没给他的**：`final` 多 `preview.withheld`（和同事试问同一格式：`id`、`facet`、`text` 前 60 字，最多 3 条）：同一问题在本人档的检索里
   找到、这位继承人按遗嘱拿不到的条目（`heirs.usable_items`，含按词面命中不谈话题的）。检索跑不了时为空。危机护栏的回复没有 `preview`。
 
+## 合成同意（P3.3）
+
+- `persona/consent.py`（代码层 4）。schema 11（`_MIGRATIONS` 第 11 条，`KernelVersion.schema` 随之为 11，不触发重新整理；升级前自动快照）加一张表：
+  `p_media_consent (id INTEGER PRIMARY KEY AUTOINCREMENT, at, kind, content_key, granted INTEGER, text)`：`kind` 是 `voice` / `portrait`，
+  `content_key` 是素材文件的 SHA-256（`AssetStore.content_key`，换一段录音或一张照片要重新同意），`text` 是同意时看到的文字（`consent.TEXTS`）
+  或“撤回”；两个触发器拒绝 `UPDATE` / `DELETE`，只追加。同一素材以最后一行为准。不在检索读的表里，写它不改记忆版本。
+- `GET /api/me/assets` 多两项：`consent: {voice, portrait}`（当前保存的素材是否已同意）和 `consent_texts`。
+  `POST /api/me/consent` `{kind, granted}` → `{voice, portrait}`；还没保存这类素材时 404。
+- 媒体层不读库，`web/media.register` 收 `agreed_to(kind, content_key)`。没同意声音时朗读用预置音色；声音和形象都同意了才用本人做视频
+  （`make_video_synthesizer(settings, own=False)` 不带本人素材），否则 `video.reason` 是“先在「关于你」同意用你的形象和声音”。
+  `GET /api/media/capabilities` 多 `own_voice`（朗读用的是本人的声音）和 `video.own`；`video.asset_key` 末尾带两位同意状态，同意或撤回后旧视频不再复用。
+- 标识：用本人声音（`VoiceSpec.own`，`voice_id` 以 `self-` 开头）合成的音频，第一段前加一句 `SYNTHESIS_NOTICE`“以下为 AI 合成。”
+  （`render_audio` 和流式朗读都加，`stream_version` 为 2）；`MediaManifest.ai_generated` 一直为 true。视频画面右上角常驻 `SYNTHESIS_BADGE`“AI 合成”
+  角标：插画视频逐帧画上，远端视频用 ffmpeg 叠上同一张角标；用本人声音时第一句前同样加那句话。网页舞台在用本人声音朗读时显示“AI 合成”，
+  视频的标签和全屏标题旁也写“AI 合成”。
+
 ## 继承人开启（P2.7）
 
 - `persona/heir_door.py`（代码层 4）。schema 10（`_MIGRATIONS` 第 10 条，`KernelVersion.schema` 随之为 10，不触发重新整理；升级前自动快照）加两张表：

@@ -371,3 +371,34 @@ it('passes thinking and speaking to a live VRM on the stage', async () => {
     'idle',
   );
 });
+
+it('marks speech in the person own voice as AI while it plays, and only then', () => {
+  const own = { ...caps, own_voice: true };
+  const view = render(
+    <MemoryRouter>
+      <ChatStage {...props} capabilities={own} />
+    </MemoryRouter>,
+  );
+  expect(screen.getByText('AI 合成')).toBeVisible();
+  view.rerender(
+    <MemoryRouter>
+      <ChatStage {...props} capabilities={own} speaking={false} />
+    </MemoryRouter>,
+  );
+  expect(screen.queryByText('AI 合成')).not.toBeInTheDocument();
+  view.rerender(
+    <MemoryRouter>
+      <ChatStage {...props} />
+    </MemoryRouter>,
+  );
+  expect(screen.queryByText('AI 合成')).not.toBeInTheDocument();
+  preference.reduced = true;
+  view.rerender(
+    <MemoryRouter>
+      <ChatStage {...props} capabilities={own} />
+    </MemoryRouter>,
+  );
+  expect(screen.getByRole('status', { name: '正在说话' })).toHaveTextContent(
+    '正在说 · AI 合成',
+  );
+});

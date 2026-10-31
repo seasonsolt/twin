@@ -1,7 +1,14 @@
 import { useRef, type RefObject } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
-import { Clip, IconButton, LinkButton, Text } from '../../components/ui';
+import {
+  Badge,
+  Clip,
+  IconButton,
+  LinkButton,
+  Row,
+  Text,
+} from '../../components/ui';
 import { personaUrl } from '../../lib/persona';
 import type { ChatReply } from './types';
 import { videoUrl, type ReplyVideoState } from './useReplyVideos';
@@ -82,11 +89,14 @@ export function ReplyVideo({
               <Text size="lg" tone="inherit" className="persona-name">
                 {name}
               </Text>
-              <Dialog.Title asChild>
-                <Text as="h2" size="sm" tone="inherit">
-                  真人版
-                </Text>
-              </Dialog.Title>
+              <Row gap={2}>
+                <Dialog.Title asChild>
+                  <Text as="h2" size="sm" tone="inherit">
+                    真人版
+                  </Text>
+                </Dialog.Title>
+                <Badge>AI 合成</Badge>
+              </Row>
             </div>
             <Dialog.Close asChild>
               <IconButton

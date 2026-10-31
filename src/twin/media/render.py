@@ -19,6 +19,7 @@ from pathlib import Path
 from ..util import fingerprint, private_directory
 from .lipsync import lipsync_for
 from .schema import (
+    SYNTHESIS_NOTICE,
     AudioManifest,
     AudioPart,
     AudioRender,
@@ -200,11 +201,16 @@ def render_audio(
         raise MediaUnavailable("Speech backend declares no audio formats")
     rendered: list[AudioSegment] = []
     label = f"AI-generated; twin; source {script.source_fingerprint}"
+    # The person's own voice says it is synthesized before the first part of whatever is rendered.
+    notice = synthesizer.voice.own
     for segment in script.segments:
         if segments is not None and segment.index not in segments:
             continue
         parts: list[AudioPart] = []
-        for text, spoken in _speech_parts(segment.text, synthesizer.voice.language, synthesizer.capabilities):
+        spoken_parts = _speech_parts(segment.text, synthesizer.voice.language, synthesizer.capabilities)
+        if notice:
+            spoken_parts, notice = [(SYNTHESIS_NOTICE, SYNTHESIS_NOTICE), *spoken_parts], False
+        for text, spoken in spoken_parts:
             request = SpeechRequest(text=spoken, voice=synthesizer.voice, audio_format=formats[0])
             key, result = _cached_speech(request, synthesizer, requests_dir)
             export_key = fingerprint({"request": key, "label": label, "writer": 1})

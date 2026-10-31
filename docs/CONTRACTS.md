@@ -218,11 +218,15 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
   no embedding call. CLI and web builds pass their active settings. A third namespace, `others`, embeds what other
   speakers said to the person (`others_view`: their messages in the same view, from ready sources) so the twin can
   recall what it was told; chat shows these as others' words and never as the person's own.
-- **Reflection and the crisis guard（P1.4）**：`ChatBody.reflection: Literal["", "mirror", "free", "dream"] = ""`
-  只在 `PersonaChat(assistant=True)`（本人自己的对话）生效，追加 `persona.reflection.REFLECTION_SECTIONS` 的一段；
-  有 reflection 的一轮不写 `p_chat_log`，`promise_*` 为空。`persona.crisis.in_crisis(text)` 在 `PersonaChat.reply` /
-  `stream_reply` 的最前面和网页的 `POST /api/persona/chat`、`/chat/stream`（含附件）里各判断一次：命中时返回
-  `crisis_reply()`（固定文字，不检索、不调用模型、不写 `p_chat_log`），网页的回复另带 `"crisis": true`，排在“记一下”之前。
+- **Reflection and the crisis guard（P1.4、P3.1、P3.2）**：`ChatBody.reflection: Literal["", "mirror", "free", "dream",
+  "voice"] = ""` 只在 `PersonaChat(assistant=True)`（本人自己的对话）生效，追加 `persona.reflection.REFLECTION_SECTIONS`
+  的一段；有 reflection 的一轮不写 `p_chat_log`，`promise_*` 为空。`"voice"`（内在声音）检索只用 D2、D3 的条目和本人的原话，
+  不用别人的话、承诺台账和会议纪要；回答在引号外有 `persona.reflection.commands` 的句式时让模型改写一次，仍有就换成
+  `voice_fallback`（只列引用的原话，最后问“你会怎么选？”）；流式回答检查完才出字。`persona.crisis.in_crisis(text)` 在
+  `PersonaChat.reply` / `stream_reply` 的最前面和网页的 `POST /api/persona/chat`、`/chat/stream`（含附件）里各判断一次：
+  命中时返回 `crisis_reply()`（固定文字，不检索、不调用模型、不写 `p_chat_log`），网页的回复另带 `"crisis": true`，
+  排在“记一下”之前。词面没命中时，`PersonaChat` 里的 `CrisisGuard` 和检索同时判断意思（向量 ≥ `CRISIS_SIMILARITY` 时问
+  模型一次 `CrisisVerdict`），判是同样返回 `crisis_reply()`，`chat_payload` 按固定文字补上 `"crisis": true`。
 - **Life review（P1.3）**：`GET /api/persona/life-review` → `{questions: [{id, text, facet, facet_name, level,
   level_label, tier, stage, stage_label}], stages: [{id, label, answered, total}]}`；`POST /api/persona/life-review/skip`
   `{question}` → `{stages}`。题号是 `persona.life_review.QUESTIONS` 的 `L01`–`L14`，`POST /api/persona/fill/draft` /

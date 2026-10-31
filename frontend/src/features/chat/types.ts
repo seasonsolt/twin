@@ -36,12 +36,13 @@ export interface HandoffLine {
 /** Who may use what the person asked their assistant to remember (``记一下``): ``none`` is not keeping it. */
 export type NoteTier = 'none' | 'colleague' | 'self';
 /** How the person is talking with their own assistant this turn: asking it things, or looking at themself. */
-export type Reflection = 'ask' | 'mirror' | 'free' | 'dream';
+export type Reflection = 'ask' | 'mirror' | 'free' | 'dream' | 'voice';
 export const REFLECTIONS = [
   { id: 'ask', label: '问答' },
   { id: 'mirror', label: '照镜子' },
   { id: 'free', label: '随便说' },
   { id: 'dream', label: '记梦' },
+  { id: 'voice', label: '内在声音' },
 ] as const satisfies readonly { id: Reflection; label: string }[];
 
 /** A note the assistant took down, shown under its reply with the tier it has now. */

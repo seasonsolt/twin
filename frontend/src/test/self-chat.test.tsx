@@ -1055,7 +1055,7 @@ it('lets the person look at themself instead of asking in their own conversation
     within(ways)
       .getAllByRole('radio')
       .map((way) => way.textContent),
-  ).toEqual(['问答', '照镜子', '随便说', '记梦']);
+  ).toEqual(['问答', '照镜子', '随便说', '记梦', '内在声音']);
   await person.click(within(ways).getByRole('radio', { name: '照镜子' }));
   await person.type(
     screen.getByRole('textbox', { name: '你说' }),
@@ -1070,6 +1070,29 @@ it('lets the person look at themself instead of asking in their own conversation
   });
   // 像我 / 不像我 is the persona edition's.
   expect(screen.queryByRole('group', { name: '像不像我' })).toBeNull();
+});
+
+it('lets the person hear their own principles said back as their inner voice', async () => {
+  const person = userEvent.setup();
+  streamed.push(
+    answer({
+      reply: '你说过：“钱的事先说清楚再谈感情”（2024-03-02）。你会怎么选？',
+    }),
+  );
+  mount(personas, '/chat', { work: false });
+  await list();
+  await screen.findByText('仅你可见');
+  const ways = screen.getByRole('radiogroup', { name: '这一轮' });
+  await person.click(within(ways).getByRole('radio', { name: '内在声音' }));
+  await person.type(
+    screen.getByRole('textbox', { name: '你说' }),
+    '朋友找我借钱，我很纠结',
+  );
+  await person.click(screen.getByRole('button', { name: '发送' }));
+  expect(await screen.findByText(/你会怎么选？/)).toBeVisible();
+  expect(bodyOf('/api/persona/chat/stream')[0]).toMatchObject({
+    reflection: 'voice',
+  });
 });
 
 it('in the persona edition offers no colleague’s answer to try, and says where help is with no word on how it answered', async () => {

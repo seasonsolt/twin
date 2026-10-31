@@ -637,7 +637,9 @@ def test_without_sign_in_the_one_person_lists_their_conversations_and_no_twin_is
 # ------------------------------------------------------------ 照镜子 · 随便说 · 记梦, and the crisis guard
 
 
-@pytest.mark.parametrize(("reflection", "heading"), [("mirror", "照镜子"), ("free", "随便说"), ("dream", "记梦")])
+@pytest.mark.parametrize(
+    ("reflection", "heading"), [("mirror", "照镜子"), ("free", "随便说"), ("dream", "记梦"), ("voice", "内在声音")]
+)
 def test_a_way_of_looking_at_oneself_is_the_assistants_and_keeps_no_question_or_promise(
     scene: Scene, reflection: str, heading: str
 ) -> None:

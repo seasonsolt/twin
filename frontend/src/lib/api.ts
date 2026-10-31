@@ -51,6 +51,9 @@ function handleApiFailure(status: number, data: unknown) {
   // twin's own sign-in page offers every way in, single sign-on included, so a 401 never leaves the page.
   if (status === 401 && 'code' in data && data.code === 'login_required')
     window.dispatchEvent(new Event('twin-login-required'));
+  // Sealed while the page was open (an heir opened the twin elsewhere): it becomes the heirs' way in.
+  if (status === 423 && 'code' in data && data.code === 'heirs_only')
+    window.dispatchEvent(new Event('twin-heirs-only'));
   if (status === 404 && 'detail' in data && data.detail === '分身不存在')
     window.dispatchEvent(new Event('twin-persona-stale'));
 }

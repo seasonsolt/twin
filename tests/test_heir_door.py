@@ -23,7 +23,7 @@ from twin.persona import heir_door, lifecycle, will
 from twin.persona import store as storage
 from twin.persona.store import PersonaStore, list_snapshots
 from twin.web import create_app
-from twin.web.heir_door import COOKIE, WRONG
+from twin.web.heir_door import COOKIE, HEIRS_ONLY, WRONG
 from twin.web.jobs import PersonaProcessing
 
 NOW = dt.datetime(2026, 10, 30, 9, 0, tzinfo=dt.UTC)
@@ -221,13 +221,30 @@ def test_on_the_web_the_first_opening_asks_then_seals_and_lets_the_heir_in(web: 
     me = client.get("/api/whoami").json()
     assert me["heir"] == {"id": web["first"], "name": "小明", "person": "张三", "persona": me["heir"]["persona"]}
     assert me["admin"] is False and me["heir"]["persona"] == client.cookies[COOKIE].rpartition(".")[0]
-    # The person's browser is the person's, as before; the memory takes no more writes.
-    assert "heir" not in person.get("/api/whoami").json()
-    assert person.post("/api/persona/will/heirs", json={"name": "小刚"}, headers=CSRF).status_code == 423
+    # Every other browser on this computer is shown the heirs' way in and nothing else: no memory, will, settings or
+    # twins, read or written.
+    seen = person.get("/api/whoami").json()
+    assert "heir" not in seen and seen["sealed"] is True and me["sealed"] is True
+    for method, route in (
+        ("GET", "/api/persona/items"),
+        ("GET", "/api/persona/will"),
+        ("POST", "/api/persona/will/heirs"),
+        ("GET", "/api/conversations"),
+        ("POST", "/api/persona/chat/stream"),
+        ("GET", "/api/personas"),
+        ("GET", "/api/admin/system"),
+        ("GET", "/api/status"),
+    ):
+        closed = person.request(method, route, json={}, headers=CSRF)
+        assert closed.status_code == 423 and closed.json() == {"detail": HEIRS_ONLY, "code": "heirs_only"}, route
+    # The way in stays open to the next heir, from any browser.
+    assert open_(person, "小红", OTHER_WORD).json()["status"] == "open"
 
 
 def test_an_heirs_cookie_reaches_only_their_tier_and_their_own_conversations(web: dict[str, Any]) -> None:
     person, first, second = web["person"], *web["heirs"]
+    # The person's own conversation, from when they were alive.
+    mine = person.post("/api/conversations", json={}, headers=CSRF).json()["id"]
     assert open_(first, "小明", WORD, confirm=True).json()["status"] == "open"
     # Once sealed, the other heir enters straight away.
     entered = open_(second, "小红", OTHER_WORD)
@@ -248,11 +265,10 @@ def test_an_heirs_cookie_reaches_only_their_tier_and_their_own_conversations(web
     # A twin other than the one they opened is not theirs to reach.
     assert first.get("/api/persona/items", headers={"X-Twin-Persona": "another"}).status_code == 403
     # Conversations: each sees only their own.
-    mine = person.post("/api/conversations", json={}, headers=CSRF).json()["id"]
     a = first.post("/api/conversations", json={}, headers=CSRF).json()
     b = second.post("/api/conversations", json={}, headers=CSRF).json()
     assert a["audience"] == f"heir:{web['first']}" and b["audience"] == f"heir:{web['second']}"
-    for client, others in ((first, (mine, b["id"])), (second, (mine, a["id"])), (person, (a["id"], b["id"]))):
+    for client, others in ((first, (mine, b["id"])), (second, (mine, a["id"]))):
         for conversation in others:
             assert client.get(f"/api/conversations/{conversation}").status_code == 404
             assert client.delete(f"/api/conversations/{conversation}", headers=CSRF).status_code == 404

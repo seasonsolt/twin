@@ -223,6 +223,13 @@ def queued(monkeypatch: pytest.MonkeyPatch) -> list[int]:
     return calls
 
 
+def behind_the_heirs_door(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reach the twin as if through the heirs' way in: in the persona edition a sealed twin answers nobody else at all
+    (``web.heir_door.HeirsOnlyMiddleware``, tested in ``tests/test_heir_door.py``); what is tested here is the twin's
+    own layer behind it, which keeps nothing whoever reaches it."""
+    monkeypatch.setattr("twin.web.heir_door.own_twin_sealed", lambda registry, edition: False)
+
+
 def persona_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, llm: FakeLLM, edition: str = "persona") -> Any:
     monkeypatch.setenv("TWIN_EDITION", edition)
     return create_app(Settings(db_path=tmp_path / "twin.db"), llm_factory=lambda: llm, embedder_factory=HashingEmbedder)
@@ -293,6 +300,9 @@ def concrete(path: str) -> str:
 def test_a_sealed_twin_refuses_every_write_to_its_memory_and_nothing_else(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, queued: list[int], edition: str
 ) -> None:
+    # The team edition has no heirs' door: its sealed twin goes on being read as ever.
+    if edition == "persona":
+        behind_the_heirs_door(monkeypatch)
     path = tmp_path / "twin.db"
     seeded(path)
     with TestClient(persona_app(tmp_path, monkeypatch, Promiser(), edition), base_url="http://localhost") as web:
@@ -332,8 +342,9 @@ def test_a_sealed_twin_refuses_every_write_to_its_memory_and_nothing_else(
 
 
 def test_a_sealed_twin_answers_but_logs_no_question_keeps_no_promise_and_takes_no_note(
-    web: tuple[TestClient, Promiser], tmp_path: Path, queued: list[int]
+    web: tuple[TestClient, Promiser], tmp_path: Path, queued: list[int], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    behind_the_heirs_door(monkeypatch)
     client, llm = web
     path = tmp_path / "twin.db"
     seeded(path)
@@ -372,6 +383,7 @@ def test_a_sealed_twin_answers_but_logs_no_question_keeps_no_promise_and_takes_n
 def test_a_sealed_twin_is_not_built_again_at_start_up_or_by_a_build_already_queued(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, queued: list[int]
 ) -> None:
+    behind_the_heirs_door(monkeypatch)
     path = tmp_path / "twin.db"
     seeded(path)
     with PersonaStore(path) as store:

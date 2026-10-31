@@ -22,8 +22,10 @@ const person = {
   auth_enabled: false,
   edition: 'persona',
 };
+// Once an heir has opened it, the person's own twin is sealed.
+const sealed = { ...person, sealed: true };
 const heir = {
-  ...person,
+  ...sealed,
   admin: false,
   heir: { id: 'heir_a', name: '小明', person: '张三', persona: 'default' },
 };
@@ -49,7 +51,7 @@ beforeEach(() => {
       if (path === '/api/heir/open')
         return open(body as Record<string, unknown>);
       if (path === '/api/heir/leave') {
-        whoami = person;
+        whoami = sealed;
         return json({ ok: true });
       }
       if (path === '/api/conversations' && method === 'GET')
@@ -126,7 +128,7 @@ it('says nothing of which was wrong, and lets the heir in only once they confirm
   );
 });
 
-it('shows an heir their own conversation alone, says whose memory it is, and leaves to the start', async () => {
+it('shows an heir their own conversation alone, says whose memory it is, and leaves to the way in', async () => {
   whoami = heir;
   const user = userEvent.setup();
   render(<App />);
@@ -148,11 +150,12 @@ it('shows an heir their own conversation alone, says whose memory it is, and lea
   );
 
   await user.click(screen.getByRole('button', { name: '离开' }));
-  expect(await screen.findByText('本人的对话页')).toBeInTheDocument();
+  expect(await screen.findByText('记忆已冻结')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '我是继承人' })).toBeVisible();
+  expect(screen.queryByText('本人的对话页')).not.toBeInTheDocument();
   expect(calls.some((c) => c.path === '/api/heir/leave')).toBe(true);
-  expect(personaKey('twin.current.conversation')).toBe(
-    'twin.current.conversation',
-  );
+  // What this browser kept for the heir is theirs no longer.
+  expect(personaKey('twin.current.conversation')).not.toContain('heir_a');
 });
 
 it('offers the way in quietly on the persona edition side bar', async () => {
@@ -163,4 +166,28 @@ it('offers the way in quietly on the persona edition side bar', async () => {
   expect(
     await screen.findByRole('dialog', { name: '我是继承人' }),
   ).toBeInTheDocument();
+});
+
+it('once sealed, shows anyone who is not an heir the way in and nothing of the person', async () => {
+  whoami = sealed;
+  const user = userEvent.setup();
+  render(<App />);
+  expect(await screen.findByText('记忆已冻结')).toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: '我是继承人' }));
+  expect(
+    await screen.findByRole('dialog', { name: '我是继承人' }),
+  ).toBeInTheDocument();
+  expect(screen.queryByText('本人的对话页')).not.toBeInTheDocument();
+  expect(screen.queryByRole('navigation')).not.toBeInTheDocument();
+  // Not even the list of twins is asked for.
+  expect(calls.map((c) => c.path)).toEqual(['/api/whoami']);
+});
+
+it('becomes the way in when the twin is sealed while the page is open', async () => {
+  render(<App />);
+  expect(await screen.findByText('本人的对话页')).toBeInTheDocument();
+  whoami = sealed;
+  window.dispatchEvent(new Event('twin-heirs-only'));
+  expect(await screen.findByText('记忆已冻结')).toBeInTheDocument();
+  expect(screen.queryByText('本人的对话页')).not.toBeInTheDocument();
 });

@@ -71,7 +71,7 @@ Positioning: Identity → Memory upload → Service. Repository, project, Python
   核对两边给模型看的内容和引用一致）。和同事试问不同，`messages` 是页面送来的整段预演（最多 40 条），不谈话题的追问照样拦下。
   只带 `heir` 不带 `preview` 400；非流式 `/api/persona/chat` 带 `preview` 照旧 400。
 - **谁能用**：只有本人（`web.handoffs.person`，和遗嘱接口一样；继承人、同事、访客 403）。遗嘱里没有这个编号（删掉了或不对）404
-  `找不到这位继承人，请刷新后重试`。记忆冻结后 423 `memory_sealed`：规格写的是“本人在世时”，冻结后遗嘱不能再改，预演也就没有用处；
+  `找不到这位继承人，请刷新后重试`。记忆冻结后 423（个人版先被“冻结后只剩继承人入口”拦下，`heirs_only`；团队版 `memory_sealed`）：规格写的是“本人在世时”，冻结后遗嘱不能再改，预演也就没有用处；
   在路由里拒绝（`lifecycle.refuse_if_sealed`），因为 `SealedMiddleware` 放过对话路径。拒绝都在调用模型之前。
 - **不留痕**：`persist=False`，不存会话、不写 `p_chat_log`、不生成转交、不改遗嘱、不冻结；没有账本、没有本人助手、`reach` 为 `none`、
   不显示团队答案，`as_of` 不生效。
@@ -108,6 +108,11 @@ Positioning: Identity → Memory upload → Service. Repository, project, Python
 - **前端**：`features/heir`。`whoami` 带 `heir` 时整个页面只有 `HeirChat`（标题“X 的记忆延续”，下面一行“不是 X 本人”；以前的对话、新对话、离开），
   不读分身列表；本机存的“当前对话”等按 `twin.heir:<继承人>:<分身>:` 另存，和本人、别的继承人分开。个人版桌面侧栏底部一个 ghost 小按钮
   “我是继承人”打开 `HeirDoor`。
+- **冻结后只剩继承人入口**：个人版里本人的分身（注册表的 `default`）冻结后，`HeirsOnlyMiddleware`（主应用里，在 `HeirSessionMiddleware` 之内）
+  对不是继承人的请求只放过 `/api/auth/*`、`GET /api/whoami`、`POST /api/heir/open`、`POST /api/heir/leave`，其余 `/api/` 都是
+  **423** `{"detail": "记忆已冻结，只有继承人能打开", "code": "heirs_only"}`（读和写都拒，包括遗嘱、预演、分身列表和设置）。
+  `GET /api/whoami` 多 `sealed: bool`（`heir_door.own_twin_sealed`，团队版恒为 false）；前端 `sealed` 且不是继承人时整页只有 `HeirsOnly`，
+  任何请求收到 `heirs_only` 时重读 `whoami`。团队版不变：冻结只拒写（`memory_sealed`）。
 
 ## Identity 与用户建档
 

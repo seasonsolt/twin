@@ -553,6 +553,26 @@ const pages: {
       }, heirConversation.id);
     },
   },
+  // The person's own twin once sealed (P2.7): this computer is the heirs' way in and nothing else.
+  {
+    name: 'heirs-only',
+    path: '/#/chat',
+    ready: '记忆已冻结',
+    setup: async (page: Page) => {
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      await page.route('**/api/whoami', (route) =>
+        route.fulfill({
+          json: {
+            email: null,
+            admin: true,
+            auth_enabled: false,
+            edition: 'persona',
+            sealed: true,
+          },
+        }),
+      );
+    },
+  },
 ];
 
 for (const { name, path, ready, viewport, setup } of pages) {

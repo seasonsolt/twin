@@ -21,13 +21,17 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from ..persona import heir_door, will
+from ..persona import heir_door, lifecycle, will
 from ..persona.store import PersonaStore
 from .auth import HEIR_VIEW, forwarded_prefix, secure_cookie
 from .conversations import HEIR_SCOPE
 from .personas import HEIR_PERSONA_SCOPE, Personas
 
 COOKIE = "twin_heir"
+# What a browser that is not an heir's still reaches once the person's own twin is sealed (``HeirsOnlyMiddleware``):
+# signing in, who is asking, and the heir's way in and out.
+HEIRS_DOOR = frozenset({"/api/whoami", "/api/heir/open", "/api/heir/leave"})
+HEIRS_ONLY = "记忆已冻结，只有继承人能打开"
 WRONG = "称呼或口令不对"
 
 
@@ -134,3 +138,41 @@ class HeirSessionMiddleware:
             return None
         session = heir_door.session_at(self.registry.db_path_of(persona_id), token, time.time())
         return (persona_id, session) if session else None
+
+
+class HeirsOnlyMiddleware:
+    """Once the person's own twin is sealed (the persona edition, where the twin is the registry's default), this
+    computer is the heirs' way in and nothing else: a request that is not an heir's reaches only ``HEIRS_DOOR`` and
+    signing in, and is answered 423 ``heirs_only`` otherwise, so the person's memory, will, settings and twins are
+    shown to no one but the heirs, through what the will gives each. The team edition is unchanged. It sits inside
+    ``HeirSessionMiddleware``, which says whose a request is."""
+
+    def __init__(self, app: ASGIApp, registry: Personas, edition: str) -> None:
+        self.app, self.registry, self.edition = app, registry, edition
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        path = str(scope.get("path", ""))
+        if (
+            scope["type"] == "http"
+            and path.startswith("/api/")
+            and not path.startswith("/api/auth/")
+            and path not in HEIRS_DOOR
+            and HEIR_SCOPE not in scope
+            and await run_in_threadpool(own_twin_sealed, self.registry, self.edition)
+        ):
+            await JSONResponse({"detail": HEIRS_ONLY, "code": "heirs_only"}, status_code=423)(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
+
+
+def own_twin_sealed(registry: Personas, edition: str) -> bool:
+    """Whether this is the persona edition and the person's own twin (the registry's default) is sealed, read without
+    opening its store."""
+    if edition != "persona":
+        return False
+    with registry.lock:
+        default = registry.data.get("default")
+        if default is None or registry.entry(default) is None:
+            return False
+        path = registry.db_path_of(default)
+    return lifecycle.sealed_path(path)

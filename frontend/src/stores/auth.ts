@@ -26,6 +26,8 @@ export interface Identity {
   edition?: Edition;
   /** An heir who opened the twin with their word (P2.7): this browser is theirs, to their own conversation alone. */
   heir?: Heir | null;
+  /** The person's own twin is sealed (P2.7): this computer is only the heirs' way in now. */
+  sealed?: boolean;
 }
 
 /** The heir in this browser, as ``/api/whoami`` says. */
@@ -111,6 +113,11 @@ export const useAuth = create<{
         items: [],
         pendingId: null,
       });
+    } else if (identity.sealed) {
+      // Sealed, the person's twins are shown to no one but the heirs, through their own way in.
+      setHeirKeys('');
+      clearPrefetch();
+      usePersonas.setState({ items: [], pendingId: null });
     } else {
       setHeirKeys('');
       await usePersonas.getState().refresh();

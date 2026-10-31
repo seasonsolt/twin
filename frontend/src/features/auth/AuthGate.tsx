@@ -11,6 +11,11 @@ import { local, loginPath, takeReturn } from './returnTo';
 const HeirChat = lazy(() =>
   import('../heir/HeirChat').then((module) => ({ default: module.HeirChat })),
 );
+const HeirsOnly = lazy(() =>
+  import('../heir/HeirsOnly').then((module) => ({
+    default: module.HeirsOnly,
+  })),
+);
 
 /**
  * Everything behind signing in. Signed out, every address leads to ``#/login``, which keeps the page asked for
@@ -48,8 +53,14 @@ export function AuthGate({ children }: { children: ReactNode }) {
         .getState()
         .refresh()
         .catch(() => {});
+    const sealed = () =>
+      void useAuth
+        .getState()
+        .login()
+        .catch(() => {});
     window.addEventListener('twin-login-required', clear);
     window.addEventListener('twin-persona-stale', stale);
+    window.addEventListener('twin-heirs-only', sealed);
     void useAuth
       .getState()
       .login(controller.signal)
@@ -73,6 +84,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
       controller.abort();
       window.removeEventListener('twin-login-required', clear);
       window.removeEventListener('twin-persona-stale', stale);
+      window.removeEventListener('twin-heirs-only', sealed);
     };
   }, []);
   if (checking) return <Skeleton className="mx-auto mt-12 h-64 max-w-sm" />;
@@ -97,6 +109,13 @@ export function AuthGate({ children }: { children: ReactNode }) {
     return (
       <Suspense fallback={<Skeleton className="mx-auto mt-12 h-64 max-w-sm" />}>
         <HeirChat key={identity.heir.id} heir={identity.heir} />
+      </Suspense>
+    );
+  // Once the person's own twin is sealed, this computer is the heirs' way in and nothing else (P2.7).
+  if (identity.sealed)
+    return (
+      <Suspense fallback={<Skeleton className="mx-auto mt-12 h-64 max-w-sm" />}>
+        <HeirsOnly />
       </Suspense>
     );
   return pathname === '/login' ? (

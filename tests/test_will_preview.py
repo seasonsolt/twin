@@ -138,10 +138,11 @@ def test_only_the_person_rehearses_only_an_heir_the_will_names_and_not_once_seal
     plain = {"messages": [{"role": "user", "content": QUESTION}], "heir": heir_id}
     assert client.post("/api/persona/chat/stream", json=plain, headers=CSRF).status_code == 400
     assert not llm.seen
-    # Once sealed, the will cannot change for what a rehearsal would show: refused as every write is.
+    # Once sealed, the will cannot change for what a rehearsal would show; in the persona edition the person's own
+    # computer is then the heirs' way in alone, and refuses before the rehearsal is looked at.
     with PersonaStore(ctx["path"]) as store:
         other = name_heir(store, "小红")
         lifecycle.seal(store)
     sealed = rehearse(client, other, QUESTION)
-    assert sealed.status_code == 423 and sealed.json()["code"] == "memory_sealed"
+    assert sealed.status_code == 423 and sealed.json()["code"] == "heirs_only"
     assert not llm.seen

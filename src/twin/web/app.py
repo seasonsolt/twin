@@ -465,6 +465,8 @@ def create_app(
     system_settings.listeners.append(system_changed)
     auth.extra = lambda: {
         "edition": settings.product.edition,
+        # The person's own twin is sealed: the page shows only the heir's way in (P2.7).
+        "sealed": heir_door.own_twin_sealed(registry, settings.product.edition),
         "features": system_settings.features(),
         "team_name": system_settings.team_name(),
     }
@@ -472,6 +474,8 @@ def create_app(
     app.add_middleware(PersonaMiddleware, registry=registry)
     # An heir reaches only what is meant for them (P2.4), whether a twin's route or the app's own.
     app.add_middleware(persona.HeirMiddleware)
+    # Once the person's own twin is sealed, only an heir's request reaches more than the heir's way in (P2.7).
+    app.add_middleware(heir_door.HeirsOnlyMiddleware, registry=registry, edition=settings.product.edition)
     # An heir's session cookie makes the request theirs (P2.7), before what an heir may reach is checked.
     app.add_middleware(heir_door.HeirSessionMiddleware, registry=registry)
     # Between sign-in and the twin's own routes, which PersonaMiddleware calls directly.

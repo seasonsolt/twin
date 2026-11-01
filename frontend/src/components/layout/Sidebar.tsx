@@ -9,17 +9,13 @@ import {
   MessageCircle,
   MessageCircleQuestion,
   Mic,
-  ScrollText,
   Settings2,
   Users,
 } from 'lucide-react';
 import { failing, useSystem } from '../../stores/system';
 import { rebuildHeld, useOpenSettings } from '../../features/settings/Settings';
-import { useKeepsWill, useOpenWill } from '../../features/will/Will';
-import { HeirDoor } from '../../features/heir/HeirDoor';
 import {
   AccountMenu,
-  Button,
   NavPill,
   SearchButton,
   StatusCard,
@@ -267,7 +263,6 @@ export function Sidebar() {
         ))}
       </nav>
       <div className="flex-1" />
-      {persona && <HeirEntry />}
       {background.length > 0 && (
         <StatusCard
           // Already there, it has nowhere to lead.
@@ -285,19 +280,6 @@ export function Sidebar() {
       )}
       <SidebarAccount />
     </aside>
-  );
-}
-
-/** 我是继承人: a quiet way in for an heir the will names, on the persona edition's side bar (P2.7). */
-function HeirEntry() {
-  const [open, setOpen] = useState(false);
-  return (
-    <>
-      <Button variant="ghost" size="sm" onClick={() => setOpen(true)}>
-        我是继承人
-      </Button>
-      <HeirDoor open={open} onOpenChange={setOpen} />
-    </>
   );
 }
 
@@ -345,9 +327,6 @@ export function SidebarAccount() {
     self?.can_manage === false || persona ? undefined : self?.id,
   );
   const openSettings = useOpenSettings();
-  // 数字遗嘱: only the person keeps one, in the persona edition.
-  const keepsWill = useKeepsWill();
-  const openWill = useOpenWill();
   const down = useSystem((state) => failing(state.data).length);
   const held = useSystem((state) => rebuildHeld(state.data));
   const { theme, setTheme, options } = useThemes();
@@ -380,16 +359,6 @@ export function SidebarAccount() {
               ]
             : [],
           [
-            ...(keepsWill
-              ? [
-                  {
-                    key: 'will',
-                    label: '数字遗嘱',
-                    icon: ScrollText,
-                    onSelect: () => openWill(),
-                  },
-                ]
-              : []),
             {
               key: 'settings',
               label: '设置',

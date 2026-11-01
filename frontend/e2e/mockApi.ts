@@ -970,35 +970,6 @@ const myTeamAnswers = [
   },
 ];
 
-/** An heir's own conversation with the twin, once they opened it (P2.7); the twin speaks only from what the will
- * gives them. */
-export const heirConversation = {
-  id: 'c-heir',
-  title: '小时候的事',
-  turns: [
-    {
-      id: 'h1',
-      role: 'user',
-      content: '你还记得我小时候学骑车的事吗？',
-      timestamp: '2026-10-17T01:30:00Z',
-    },
-    {
-      id: 'h2',
-      role: 'twin',
-      content:
-        '记得。那年夏天在小区后面的空地上，你摔了好几次也不肯回家，最后是自己骑到了路口。我常说你做事认准了就不撒手。',
-      timestamp: '2026-10-17T01:30:08Z',
-      reply: {
-        reply:
-          '记得。那年夏天在小区后面的空地上，你摔了好几次也不肯回家，最后是自己骑到了路口。我常说你做事认准了就不撒手。',
-        citations: [],
-        confidence: 0.7,
-      },
-    },
-  ],
-  audience: 'heir:heir_yu',
-};
-
 const history = [
   {
     id: 'c-plan',
@@ -1383,65 +1354,6 @@ const facetLevels: [string, string, number][] = [
 
 // Facets at the third level whose answers held up when the twin was asked about them.
 const checkedFacets = new Set(['2.1', '5.1']);
-
-const willHeir = (heir_id: string, name: string, relation: string) => ({
-  heir_id,
-  name,
-  relation,
-  aspects: [] as string[],
-  facets: [] as string[],
-  avoid: [] as string[],
-  voice: false,
-  likeness: false,
-  retire_on: null as string | null,
-  farewell: null as string | null,
-  created_at: '2026-10-12T21:05:00',
-  updated_at: '2026-10-16T20:12:00',
-});
-
-export const willHeirs = [
-  {
-    ...willHeir('heir_yu', '小雨', '女儿'),
-    aspects: ['D1', 'D2', 'D9'],
-    facets: ['3.1'],
-    avoid: ['前一段婚姻'],
-    voice: true,
-    retire_on: '2066-06-01',
-  },
-  willHeir('heir_zhou', '老周', '老友'),
-];
-
-/**
- * 预演 as 小雨: the streamed answer to a question of hers, from what the will gives her, with what the person's own
- * retrieval also found that she is not given; a topic the will says not to talk about gets the fixed reply.
- */
-export const willRehearsal = (question: string) => {
-  const avoided = question.includes('婚姻');
-  const reply = avoided
-    ? '这件事林舟生前交代过，不和你谈。我们聊点别的吧。'
-    : '周末多半在河边，钓不钓得到都无所谓，图个安静。你小时候总嫌我坐不住，其实我是在等你。';
-  const final = {
-    reply,
-    citations: [],
-    confidence: avoided ? 1 : 0.86,
-    abstain: false,
-    mode: avoided ? 'general' : 'grounded',
-    retrieved_ids: [],
-    cited: [],
-    preview: {
-      withheld: avoided
-        ? []
-        : [
-            { id: 'pi_rule', facet: '底线与原则', text: '他做事不欠人情' },
-            { id: 'pi_health', facet: '身体与健康', text: '他这两年在复查' },
-          ],
-    },
-  };
-  return (
-    `event: delta\ndata: ${JSON.stringify({ text: reply })}\n\n` +
-    `event: final\ndata: ${JSON.stringify(final)}\n\n`
-  );
-};
 
 const coverage = {
   taxonomy: 't3',
@@ -2323,7 +2235,6 @@ const handlers: Record<string, Handler> = {
   }),
   'GET /api/persona/state': reply({ stale: false }),
   'GET /api/persona/reflections': reply({ closed: [] }),
-  'GET /api/persona/will/words': reply({ words: [] }),
   'GET /api/persona/pace': reply({
     pace: { kind: 'off', limit: 30 },
     used: null,
@@ -2332,9 +2243,6 @@ const handlers: Record<string, Handler> = {
   'GET /api/conversations': reply(history),
   'GET /api/personas/conversations': reply(everyone(null)),
   'GET /api/conversations/c-plan': reply(conversation),
-  'GET /api/conversations/c-heir': reply(heirConversation),
-  // 我是继承人 (P2.7): the right name and word, the first time, before the seal is confirmed.
-  'POST /api/heir/open': reply({ status: 'confirm' }),
   'GET /api/conversations/c-handoff': reply(handoffConversation),
   'GET /api/conversations/c-team': reply(teamConversation),
   'GET /api/conversations/c-deleg': reply(delegationConversation),
@@ -2674,36 +2582,6 @@ const handlers: Record<string, Handler> = {
     years: [],
     undated: [],
     since: 2019,
-  }),
-  // 数字遗嘱: two heirs, one given whole aspects and a facet until a day, one given nothing yet.
-  'GET /api/persona/will': () => ({ heirs: willHeirs, sealed: false }),
-  'GET /api/persona/will/history': () => ({
-    changes: [
-      {
-        at: '2026-10-12T21:05:00',
-        actor: 'self',
-        action: 'add',
-        heir_id: 'heir_yu',
-        changes: [],
-        heirs: willHeirs.slice(0, 1),
-      },
-      {
-        at: '2026-10-15T09:30:00',
-        actor: 'self',
-        action: 'add',
-        heir_id: 'heir_zhou',
-        changes: [],
-        heirs: willHeirs,
-      },
-      {
-        at: '2026-10-16T20:12:00',
-        actor: 'self',
-        action: 'update',
-        heir_id: 'heir_yu',
-        changes: ['aspects', 'retire_on'],
-        heirs: willHeirs,
-      },
-    ],
   }),
   'GET /api/persona/handoffs': reply(away),
   'GET /api/persona/handoffs/count': reply({ pending: away.pending }),

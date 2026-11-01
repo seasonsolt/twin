@@ -4,8 +4,7 @@ themself, and the way is put away until they open it again.
 
 The closing words are fixed, not a model's, so they hold no advice and nothing that asks the person to come back. The
 words of theirs are what they said of what they value and how they decide (``reflection.VOICE_DIMENSIONS``), quoted as
-written and dated; ``own_words`` also lists them for the will's goodbye (``retirement``). Which ways are put away is
-kept in ``p_meta``.
+written and dated. Which ways are put away is kept in ``p_meta``.
 """
 
 from __future__ import annotations

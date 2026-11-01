@@ -38,14 +38,11 @@ from .schema import ChatReply, Expression, LedgerEntry, ParsedSource, ReviewStat
 from .tiers import (
     COLLEAGUE,
     DEFAULT_TIERS,
-    NOTHING,
     SELF,
     TIERS,
     Audience,
-    HeirGrant,
     Tier,
     carry_tiers,
-    is_heir,
     note_item_tier,
 )
 
@@ -96,9 +93,7 @@ _REVISION = (
         for event, row in (("INSERT", "NEW"), ("UPDATE", "NEW"), ("DELETE", "OLD"))
     )
 )
-# 数字遗嘱 (``persona.will``): the person's heirs, each with the scrypt hash of the word that opens the twin to them
-# (never the word itself, kept apart from what is shown), and every change to the will kept whole: written once, never
-# changed or deleted.
+# Tables of the digital will, since removed: created by migration 9 and kept as they are, never read or written.
 _WILL = """
 CREATE TABLE IF NOT EXISTS p_will_heirs (heir_id TEXT PRIMARY KEY, json TEXT NOT NULL, secret TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS p_will_history (
@@ -109,8 +104,7 @@ BEGIN SELECT RAISE(ABORT, 'p_will_history is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS p_will_history_no_delete BEFORE DELETE ON p_will_history
 BEGIN SELECT RAISE(ABORT, 'p_will_history is append-only'); END;
 """
-# 继承人开启 (``persona.heir_door``): the sessions of heirs who opened the twin with their word (only a hash of each
-# cookie's token), and every opening, entry and wrong word, written once, never changed or deleted.
+# Tables of the heirs' door, since removed: created by migration 10 and kept as they are, never read or written.
 _HEIR_DOOR = """
 CREATE TABLE IF NOT EXISTS p_heir_sessions (hash TEXT PRIMARY KEY, heir_id TEXT NOT NULL, expires REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS p_heir_log (
@@ -153,9 +147,9 @@ _MIGRATIONS: tuple[str, ...] = (
     # (``Expression.mirror``): a release before them refuses the database instead of failing on its rows, and the
     # database is snapshotted before it changes. The index finds a twin's sources of one kind.
     "CREATE INDEX IF NOT EXISTS p_sources_kind ON p_sources(kind);",
-    # 9: 数字遗嘱 (``persona.will``).
+    # 9: the digital will (removed; its tables stay).
     _WILL,
-    # 10: 继承人开启 (``persona.heir_door``).
+    # 10: the heirs' door (removed; its tables stay).
     _HEIR_DOOR,
     # 11: 合成同意 (``persona.consent``).
     _CONSENT,
@@ -168,22 +162,10 @@ _SELF_FACETS_SQL = ",".join(f"'{f}'" for f, tier in sorted(DEFAULT_TIERS.items()
 _TIER_SQL = f"COALESCE(t.tier, CASE WHEN i.facet_id IN ({_SELF_FACETS_SQL}) THEN 'self' ELSE 'colleague' END)"
 
 
-def _audience_sql(audience: Audience, grant: HeirGrant | None) -> tuple[str, list[object]]:
+def _audience_sql(audience: Audience) -> str:
     """The condition on items ``i`` (with their tier ``t``) a conversation of ``audience``, not the person, may use, as
-    ``tiers.for_audience`` decides it: a colleague's the colleague tier, an heir's what ``grant`` gives (nothing
-    without one)."""
-    if not is_heir(audience):
-        return f"{_TIER_SQL} = 'colleague'", []
-    given = grant or NOTHING
-    if not given.facets:
-        return "0", []
-    facets, single = sorted(given.facets), sorted(given.single)
-    marked = (
-        f"COALESCE(t.tier, '') != 'self' OR i.facet_id IN ({','.join('?' * len(single))})"
-        if single
-        else ("COALESCE(t.tier, '') != 'self'")
-    )
-    return f"(i.facet_id IN ({','.join('?' * len(facets))}) AND ({marked}))", [*facets, *single]
+    ``tiers.for_audience`` decides it: the colleague tier."""
+    return f"{_TIER_SQL} = 'colleague'"
 
 
 SNAPSHOT_DIR = "kernel-snapshots"
@@ -198,8 +180,6 @@ ITEMS_NAMESPACE = "items"
 # A facet's merged batches (``profile.MergeCache``).
 MERGE_CACHE_PREFIX = "merge_batch:"
 SNAPSHOT_KEEP = 3
-# Snapshots kept whatever the count: the one taken as the memory was sealed (``lifecycle.SEAL_SNAPSHOT``).
-KEPT_SNAPSHOT = re.compile(r"-sealed(-\d+)?$")
 
 
 def list_snapshots(db_path: Path) -> list[Path]:
@@ -425,24 +405,6 @@ class PersonaStore:
                     "INSERT OR REPLACE INTO p_meta VALUES (?, ?)",
                     (f"{INHERIT_META}{facet_id}", json.dumps([*kept, *copies], ensure_ascii=False)),
                 )
-            # A facet the will gives an heir is given on as every facet it became; a removed one is given no more.
-            for heir_id, raw in db.execute("SELECT heir_id, json FROM p_will_heirs ORDER BY rowid").fetchall():
-                heir = json.loads(raw)
-                given = list(dict.fromkeys(t for f in heir.get("facets", []) for t in plan.get(f, (f,))))
-                if given != heir.get("facets", []):
-                    heir["facets"] = given
-                    db.execute(
-                        "UPDATE p_will_heirs SET json = ? WHERE heir_id = ?",
-                        (json.dumps(heir, ensure_ascii=False), heir_id),
-                    )
-                    self._append_will_history(
-                        db,
-                        heir_id,
-                        action="taxonomy",
-                        actor="twin",
-                        at=dt.datetime.now().isoformat(timespec="seconds"),
-                        changes=["facets"],
-                    )
             db.execute("INSERT OR REPLACE INTO p_meta VALUES (?, ?)", (TAXONOMY_META, TAXONOMY_VERSION))
 
     def snapshot(self, label: str) -> Path | None:
@@ -462,9 +424,7 @@ class PersonaStore:
         prepare_private_file(target)
         with self._lock, closing(sqlite3.connect(target)) as out:
             self._db.backup(out)
-        # The snapshot taken as the memory was sealed (``lifecycle.seal``) is the way back from a seal opened by
-        # mistake, so later ones never push it out.
-        for old in [p for p in list_snapshots(self.path) if not KEPT_SNAPSHOT.search(p.stem)][:-SNAPSHOT_KEEP]:
+        for old in list_snapshots(self.path)[:-SNAPSHOT_KEEP]:
             old.unlink(missing_ok=True)
         return target
 
@@ -1020,13 +980,11 @@ class PersonaStore:
         limit: int | None = None,
         offset: int = 0,
         audience: Audience = SELF,
-        grant: HeirGrant | None = None,
     ) -> tuple[list[PersonaItem], int]:
         """One page of items with reviews applied, filtered in SQL, and the number of items matching the filters.
         ``text`` matches the statement as shown (the edited one after an edit) and the evidence quotes;
         ``source_id`` keeps items with evidence from that source; ``conflict`` keeps items whose evidence disagrees;
-        ``by_evidence`` puts the best-supported first; ``audience`` leaves out the items it may not use (for an heir,
-        those ``grant`` does not give, ``tiers.heir_usable``)."""
+        ``by_evidence`` puts the best-supported first; ``audience`` leaves out the items it may not use."""
         status = f"COALESCE(json_extract(r.json, '$.status'), '{ReviewStatus.UNREVIEWED.value}')"
         clauses: list[str] = []
         params: list[object] = []
@@ -1056,9 +1014,7 @@ class PersonaStore:
         if conflict:
             clauses.append("COALESCE(json_extract(i.json, '$.conflict'), '') != ''")
         if audience != SELF:
-            clause, values = _audience_sql(audience, grant)
-            clauses.append(clause)
-            params += values
+            clauses.append(_audience_sql(audience))
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         order = "json_array_length(i.json, '$.evidence') DESC, i.item_id" if by_evidence else "i.facet_id, i.item_id"
         base = (
@@ -1077,18 +1033,14 @@ class PersonaStore:
         ]
         return items, total
 
-    def item_counts(
-        self, audience: Audience = SELF, grant: HeirGrant | None = None
-    ) -> dict[tuple[str, ReviewStatus], int]:
-        """Item counts per facet and review status (rejected items included), of the items ``audience`` may use (an
-        heir's, those ``grant`` gives)."""
-        only, params = ("", []) if audience == SELF else _audience_sql(audience, grant)
+    def item_counts(self, audience: Audience = SELF) -> dict[tuple[str, ReviewStatus], int]:
+        """Item counts per facet and review status (rejected items included), of the items ``audience`` may use."""
+        only = "" if audience == SELF else _audience_sql(audience)
         with self._lock:
             rows = self._db.execute(
                 f"SELECT i.facet_id, COALESCE(json_extract(r.json, '$.status'), '{ReviewStatus.UNREVIEWED.value}'), "
                 "COUNT(*) FROM known_items i LEFT JOIN p_reviews r ON r.item_id = i.item_id "
-                f"LEFT JOIN p_item_tiers t ON t.item_id = i.item_id{' WHERE ' + only if only else ''} GROUP BY 1, 2",
-                params,
+                f"LEFT JOIN p_item_tiers t ON t.item_id = i.item_id{' WHERE ' + only if only else ''} GROUP BY 1, 2"
             ).fetchall()
         return {(facet, ReviewStatus(status)): int(n) for facet, status, n in rows}
 
@@ -1267,65 +1219,6 @@ class PersonaStore:
             ).fetchall()
         return {key[len(prefix) :]: value for key, value in rows}
 
-    def will_heirs(self) -> list[str]:
-        """The heirs of the will (``persona.will.Heir`` JSON), in the order they were named; never their secrets."""
-        with self._lock:
-            return [r[0] for r in self._db.execute("SELECT json FROM p_will_heirs ORDER BY rowid")]
-
-    def will_secret(self, heir_id: str) -> str | None:
-        """The stored hash and its parameters of the word that opens the twin to one heir."""
-        with self._lock:
-            row = self._db.execute("SELECT secret FROM p_will_heirs WHERE heir_id = ?", (heir_id,)).fetchone()
-        return None if row is None else str(row[0])
-
-    def write_will(
-        self,
-        heir_id: str,
-        heir: str | None,
-        secret: str | None,
-        *,
-        action: str,
-        actor: str,
-        at: str,
-        changes: list[str],
-    ) -> None:
-        """Write one heir (``heir`` None removes them; ``secret`` None keeps theirs) and keep the whole will as it now
-        stands, without secrets, as one more row of its history, in one transaction."""
-        with self._tx() as db:
-            if heir is None:
-                db.execute("DELETE FROM p_will_heirs WHERE heir_id = ?", (heir_id,))
-            elif secret is None:
-                if db.execute("UPDATE p_will_heirs SET json = ? WHERE heir_id = ?", (heir, heir_id)).rowcount != 1:
-                    raise KeyError(heir_id)
-            else:
-                db.execute(
-                    "INSERT INTO p_will_heirs VALUES (?, ?, ?)"
-                    " ON CONFLICT(heir_id) DO UPDATE SET json = excluded.json, secret = excluded.secret",
-                    (heir_id, heir, secret),
-                )
-            self._append_will_history(db, heir_id, action=action, actor=actor, at=at, changes=changes)
-
-    @staticmethod
-    def _append_will_history(
-        db: sqlite3.Connection, heir_id: str, *, action: str, actor: str, at: str, changes: list[str]
-    ) -> None:
-        heirs = [json.loads(r[0]) for r in db.execute("SELECT json FROM p_will_heirs ORDER BY rowid")]
-        db.execute(
-            "INSERT INTO p_will_history (at, actor, action, heir_id, json) VALUES (?, ?, ?, ?, ?)",
-            (at, actor, action, heir_id, json.dumps({"changes": changes, "heirs": heirs}, ensure_ascii=False)),
-        )
-
-    def will_history(self) -> list[tuple[str, str, str, str, str]]:
-        """Every change to the will, oldest first: when, by whom, what was done to which heir, and the will after it."""
-        with self._lock:
-            rows = self._db.execute("SELECT at, actor, action, heir_id, json FROM p_will_history ORDER BY id")
-            return [tuple(r) for r in rows]
-
-    def log_heir(self, at: str, heir_id: str, event: str) -> None:
-        """One more line of the heirs' log (``persona.heir_door``): when, which heir (none for a wrong try), what."""
-        with self._tx() as db:
-            db.execute("INSERT INTO p_heir_log (at, heir_id, event) VALUES (?, ?, ?)", (at, heir_id, event))
-
     def add_consent(self, at: str, kind: str, content_key: str, granted: bool, text: str) -> None:
         """One more line of the synthesis consents (``persona.consent``): agreed to, or withdrawn."""
         with self._tx() as db:
@@ -1339,34 +1232,6 @@ class PersonaStore:
         with self._lock:
             rows = self._db.execute("SELECT at, kind, content_key, granted, text FROM p_media_consent ORDER BY id")
             return [(at, kind, key, bool(granted), text) for at, kind, key, granted, text in rows]
-
-    def heir_log(self) -> list[tuple[str, str, str]]:
-        """The heirs' log, oldest first: when, which heir, what."""
-        with self._lock:
-            return [tuple(r) for r in self._db.execute("SELECT at, heir_id, event FROM p_heir_log ORDER BY id")]
-
-    def heir_failures(self, success: tuple[str, ...]) -> tuple[int, str | None]:
-        """How many lines of the heirs' log are ``fail`` since the last of the ``success`` events, and when the last of
-        them was."""
-        marks = ",".join("?" * len(success))
-        with self._lock:
-            since = self._db.execute(
-                f"SELECT COALESCE(MAX(id), 0) FROM p_heir_log WHERE event IN ({marks})", success
-            ).fetchone()[0]
-            count, last = self._db.execute(
-                "SELECT COUNT(*), MAX(at) FROM p_heir_log WHERE id > ? AND event = 'fail'", (since,)
-            ).fetchone()
-        return int(count), last
-
-    def add_heir_session(self, token_hash: str, heir_id: str, expires: float, now: float) -> None:
-        """Keep a new heir session, and forget those that have ended."""
-        with self._tx() as db:
-            db.execute("DELETE FROM p_heir_sessions WHERE expires <= ?", (now,))
-            db.execute("INSERT INTO p_heir_sessions VALUES (?, ?, ?)", (token_hash, heir_id, expires))
-
-    def end_heir_session(self, token_hash: str) -> None:
-        with self._tx() as db:
-            db.execute("DELETE FROM p_heir_sessions WHERE hash = ?", (token_hash,))
 
     def speaker_names(self) -> SpeakerNames:
         return SpeakerNames(

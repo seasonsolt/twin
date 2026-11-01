@@ -27,20 +27,19 @@ from ..finder import Finder, refresh_coverage
 from ..handoffs import HandoffDesk, run_all
 from ..lenses import Lenses
 from ..media.tts import SpeechSynthesizer
-from ..persona import gate, lifecycle
+from ..persona import gate
 from ..persona.chat import keep_material_up_to
 from ..persona.consent import agreed_to
 from ..persona.gate import MemoryUpdating
 from ..persona.kernel import KERNEL, rebuild_scope
 from ..persona.lexical import keep_up_to
-from ..persona.lifecycle import MemorySealed
 from ..persona.profile import pending_chunks
 from ..persona.store import NewerStoreError, PersonaStore, stored_avatar, stored_identity
 from ..teamanswers import TeamAnswers
 from ..teamdb import TeamDB, team_path
 from ..usage import UsageLedger, UsageRecorder, install_default
 from . import ask as ask_routes
-from . import assets, gpu, heir_door, library, media, minutes, persona, system, team_answers, voice
+from . import assets, gpu, library, media, minutes, persona, system, team_answers, voice
 from . import delegation as delegation_routes
 from . import lenses as lens_routes
 from .auth import Auth, AuthMiddleware, forwarded_prefix
@@ -470,19 +469,11 @@ def create_app(
     system_settings.listeners.append(system_changed)
     auth.extra = lambda: {
         "edition": settings.product.edition,
-        # The person's own twin is sealed: the page shows only the heir's way in (P2.7).
-        "sealed": heir_door.own_twin_sealed(registry, settings.product.edition),
         "features": system_settings.features(),
         "team_name": system_settings.team_name(),
     }
     auth.public = lambda: {"team_name": system_settings.team_name()}
     app.add_middleware(PersonaMiddleware, registry=registry)
-    # An heir reaches only what is meant for them (P2.4), whether a twin's route or the app's own.
-    app.add_middleware(persona.HeirMiddleware)
-    # Once the person's own twin is sealed, only an heir's request reaches more than the heir's way in (P2.7).
-    app.add_middleware(heir_door.HeirsOnlyMiddleware, registry=registry, edition=settings.product.edition)
-    # An heir's session cookie makes the request theirs (P2.7), before what an heir may reach is checked.
-    app.add_middleware(heir_door.HeirSessionMiddleware, registry=registry)
     # Between sign-in and the twin's own routes, which PersonaMiddleware calls directly.
     app.add_middleware(system.FeatureGate, system=system_settings)
     app.add_middleware(AuthMiddleware, auth=auth)
@@ -536,15 +527,10 @@ def create_app(
 
         scoped_jobs = jobs.scoped(persona_id)
         context.add_middleware(persona.MemoryGateMiddleware, db_path=resolved.db_path)
-        context.add_middleware(persona.SealedMiddleware, db_path=resolved.db_path)
 
         @context.exception_handler(MemoryUpdating)
         async def memory_updating(request: Request, exc: MemoryUpdating) -> JSONResponse:
             return JSONResponse({"detail": str(exc), "code": "memory_updating"}, status_code=409)
-
-        @context.exception_handler(MemorySealed)
-        async def memory_sealed(request: Request, exc: MemorySealed) -> JSONResponse:
-            return persona.sealed_response()
 
         @context.exception_handler(JobConflict)
         async def scoped_conflict(request: Request, exc: JobConflict) -> JSONResponse:
@@ -555,13 +541,8 @@ def create_app(
         def kernel_status(store: PersonaStore) -> dict[str, Any]:
             """The kernel the memories were built on, what upgrading to the running one redoes, and how far it is."""
             built = store.kernel_built()
-            # A twin with no memories yet has nothing built on an older kernel, though it records none; a sealed one
-            # is never built again (``lifecycle``).
-            scope = (
-                rebuild_scope(built, KERNEL)
-                if (store.count_sources() or store.count_items()) and not lifecycle.sealed(store)
-                else "none"
-            )
+            # A twin with no memories yet has nothing built on an older kernel, though it records none.
+            scope = rebuild_scope(built, KERNEL) if store.count_sources() or store.count_items() else "none"
             kernel_pending = pending_chunks(store, resolved) if scope != "none" else 0
             state = context.state.processing.view()
             blocked = scope != "none" and (
@@ -659,7 +640,6 @@ def create_app(
             delegations=delegations,
         )
         delegation_routes.register(context, delegations, desk, backends, request_asker_name, scoped_jobs)
-        heir_door.register(context, persona_id, ingestion.lock, lambda: PersonaStore(resolved.db_path))
         lens_routes.register(
             context,
             resolved,

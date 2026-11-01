@@ -16,15 +16,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..config import Settings
 from ..llm import LLMError
-from ..persona import fill, heirs, life_review, life_story
+from ..persona import fill, life_review, life_story
 from ..persona.coverage import LEVEL_LABELS, coverage_report
 from ..persona.dimensions import FACET_BY_ID
 from ..persona.profile import consented_facets
 from ..persona.questionnaire import QUESTIONS
 from ..persona.store import PersonaStore, stored_identity
-from ..persona.tiers import default_tier, is_heir
+from ..persona.tiers import default_tier
 from .backends import Backends
-from .conversations import request_audience
 from .handoffs import person
 
 FacetId = Annotated[str, Field(min_length=3, max_length=5)]
@@ -240,13 +239,10 @@ def register(
     @app.get("/api/persona/life-story")
     def life_story_view(request: Request) -> dict[str, Any]:
         """生命叙事: the person's turning points, stories and what their life has meant, by year, gaps kept as gaps;
-        and the ones whose year their words do not tell. The person's alone, and an heir's of what the will gives
-        them (``persona.heirs``)."""
-        audience = request_audience(request)
-        if not is_heir(audience):
-            person(request)
+        and the ones whose year their words do not tell. The person's alone."""
+        person(request)
         with open_store() as store:
-            items = heirs.usable_items(store, store.list_items(), audience)
+            items = store.list_items()
         spans, undated = life_story.story(items, dt.date.today())
 
         def view(p: life_story.Placed) -> dict[str, Any]:

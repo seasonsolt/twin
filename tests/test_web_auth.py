@@ -275,7 +275,6 @@ def test_logout_expiration_csrf_and_static(web: TestClient) -> None:
         "auth_enabled": True,
         "provider": "email",
         "edition": "team",
-        "sealed": False,
         "features": {"work": True, "ledger": True},
         "team_name": None,
     }
@@ -358,7 +357,6 @@ def test_auth_disabled_and_config_errors(tmp_path: Path, monkeypatch: pytest.Mon
             "auth_enabled": False,
             "provider": None,
             "edition": "team",
-            "sealed": False,
             "features": {"work": True, "ledger": True},
             "team_name": None,
         }
@@ -599,7 +597,6 @@ def test_sso_borrows_the_other_apps_login(sso: tuple[TestClient, FakeLogin]) -> 
         "auth_enabled": True,
         "provider": "sso",
         "edition": "team",
-        "sealed": False,
         "features": {"work": True, "ledger": True},
         "team_name": None,
     }
@@ -1091,7 +1088,6 @@ def test_own_accounts_sign_in_beside_sso(both: tuple[TestClient, FakeLogin]) -> 
         "auth_enabled": True,
         "provider": "sso",
         "edition": "team",
-        "sealed": False,
         "features": {"work": True, "ledger": True},
         "team_name": None,
     }

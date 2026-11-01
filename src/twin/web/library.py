@@ -56,7 +56,7 @@ from ..media.minutes import MINUTES_VERSION, WRITTEN_VERSION, Line, Minutes, mee
 from ..media.review import Reviews, cut_parts
 from ..media.schema import AVATAR_GENDERS, default_avatar
 from ..media.team import SOURCE_PREFIX, Gender, Stale, Team, TwinSource
-from ..persona import gate, lifecycle
+from ..persona import gate
 from ..persona.schema import ParsedSource, Source, SourceKind
 from ..persona.sources import TurnsFile, is_generic_speaker, parse_media, parse_turns
 from ..persona.store import PersonaStore, stored_avatar, stored_identity
@@ -714,9 +714,6 @@ class Libraries:
         if row is None or self.registry is None or self.registry.entry(persona_id) is None:
             return False
         db_path = self.registry.settings_for(persona_id).db_path
-        if lifecycle.sealed_path(db_path):
-            # Nothing the library decides any more reaches a sealed memory (``lifecycle``).
-            return False
         _, person_id, wanted, done = row
         exhausted = self.quota(owner)["exhausted"]
         with self.lock:

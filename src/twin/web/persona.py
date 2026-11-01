@@ -8,7 +8,6 @@ import datetime as dt
 import json
 import logging
 import math
-import re
 import time
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterator, Sequence
 from contextlib import aclosing, asynccontextmanager, contextmanager, suppress
@@ -31,7 +30,7 @@ from ..delegations import Asked, Unclear
 from ..embed import Embedder, EmbedError
 from ..handoffs import HandoffDesk
 from ..llm import LLM, Effort
-from ..persona import gate, heirs, lifecycle, retirement, will
+from ..persona import gate
 from ..persona.assistant import note_text
 from ..persona.attachments import (
     MAX_CHAT_ATTACHMENT_BYTES,
@@ -40,6 +39,7 @@ from ..persona.attachments import (
     AttachmentPassage,
     select_attachment_passages,
 )
+from ..persona.audience import hidden_words, usable_items
 from ..persona.chat import (
     LEDGER_PREFIX,
     Asker,
@@ -58,7 +58,6 @@ from ..persona.dimensions import DIMENSION_BY_ID, DIMENSIONS, FACET_BY_ID, FACET
 from ..persona.items import PersonaItem, PReview
 from ..persona.kernel import KERNEL, rebuild_scope
 from ..persona.ledger import KIND_LABELS as LEDGER_KIND_LABELS
-from ..persona.lifecycle import MemorySealed
 from ..persona.profile import (
     KERNEL_AWAITING_NOTICE,
     KERNEL_STALE_NOTICE,
@@ -75,14 +74,13 @@ from ..persona.schema import SOURCE_KIND_LABELS, ChatReply, ChatTurn, ReviewStat
 from ..persona.sources import MEMORY_KIND_LABELS, expression_view, parse_note, parse_upload
 from ..persona.store import PersonaStore, stored_identity
 from ..persona.text import extract_text
-from ..persona.tiers import COLLEAGUE, SELF, Audience, PrivateWords, Tier, heir_audience, heir_of, is_heir, item_tier
+from ..persona.tiers import COLLEAGUE, SELF, Audience, PrivateWords, Tier, item_tier
 from ..teamanswers import prompt_line, question_of
 from ..usage import CallRow, collect_calls, model_tokens, rate_limited, transient_summary
 from . import assistant as assistant_routes
 from .assistant import keep_note, note_reply, person_only, trial_withheld
 from .backends import Backends, BackendUnavailable
 from .conversations import (
-    HEIR_SCOPE,
     ConversationIndex,
     append_reply,
     append_user,
@@ -91,7 +89,6 @@ from .conversations import (
     request_asker_name,
     request_audience,
 )
-from .handoffs import person
 from .jobs import AdmittedStream, Job, JobConflict, JobManager, PersonaProcessing, Ticket
 
 if TYPE_CHECKING:
@@ -164,9 +161,6 @@ class ChatBody(BaseModel):
     # 看同事会得到什么: answer the last message as a colleague would be answered, and keep nothing of it. Only the
     # person themself can ask for it.
     preview: bool = False
-    # 预演 (P2.6): with ``preview``, answer as the will answers this heir of it (``heir:<id>``), the whole rehearsal
-    # sent by the page each time, and keep nothing. Only the person themself, while the memory is not sealed.
-    heir: str | None = Field(default=None, max_length=100)
     # A way of talking with one's own assistant about oneself (``persona.reflection``); ignored anywhere else.
     reflection: Reflection = ""
     # 时间切片: answer from what was known of the person on this day (a year chosen is its 31 December). Only in the
@@ -180,9 +174,9 @@ class TierBody(BaseModel):
 
 def visible_item(store: PersonaStore, item_id: str, audience: Audience) -> None:
     """404 unless the item exists and ``audience`` may see it: an item of the person's own tier does not show that it
-    exists to anyone else, nor one the will does not give to an heir."""
+    exists to anyone else."""
     item = store.get_item(item_id)
-    if item is None or (audience != SELF and not heirs.usable_items(store, [item], audience)):
+    if item is None or (audience != SELF and not usable_items(store, [item], audience)):
         raise HTTPException(404, f"找不到档案条目 {item_id}（可能已在重新构建时合并）")
 
 
@@ -332,7 +326,7 @@ def for_citation(store: PersonaStore, items: dict[str, PersonaItem], audience: A
     """The cited items a conversation of ``audience`` may be shown."""
     if audience == SELF or not items:
         return items
-    allowed = {i.item_id for i in heirs.usable_items(store, items.values(), audience)}
+    allowed = {i.item_id for i in usable_items(store, items.values(), audience)}
     return {item_id: item for item_id, item in items.items() if item_id in allowed}
 
 
@@ -369,7 +363,7 @@ def cited_view(
             cited.append({"id": ref, "kind": "item", "facet": facet, "text": item.statement})
         elif (e := store.get_expression(ref)) is not None:
             if hidden is None:  # read once, and only when an answer cites someone's words
-                hidden = heirs.hidden_words(store, audience)
+                hidden = hidden_words(store, audience)
             if ref in hidden:
                 continue
             day = e.date.isoformat() if e.date else None
@@ -499,103 +493,6 @@ class MemoryGateMiddleware:
         await self.app(scope, receive, send)
 
 
-# Writes that grow or change a twin's memory, refused once it is sealed (``persona.lifecycle``): every method but
-# reading, under these prefixes, unless ``SEALED_ALLOWED`` keeps it, so a write added here later is refused too.
-SEALED_PATHS = ("/api/persona", "/api/uploads", "/api/identity", "/api/me", "/api/kernel")
-# Asking the twin, which answers as ever and leaves nothing in its memory (``PersonaChat``).
-SEALED_ALLOWED = ("/api/persona/chat",)
-READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
-
-
-def _under(path: str, prefixes: tuple[str, ...]) -> bool:
-    return any(path == prefix or path.startswith(prefix + "/") for prefix in prefixes)
-
-
-def sealed_write(method: str, path: str) -> bool:
-    """Whether a request of ``method`` to ``path`` is refused by a sealed twin."""
-    return method not in READ_METHODS and _under(path, SEALED_PATHS) and not _under(path, SEALED_ALLOWED)
-
-
-def sealed_response() -> JSONResponse:
-    return JSONResponse({"detail": str(MemorySealed()), "code": MemorySealed.code}, status_code=423)
-
-
-class SealedMiddleware:
-    """Refuse every write to a twin's memory once it is sealed (``sealed_write``); reading it and talking with it go
-    on. The command line, the build and the background work check the seal themselves."""
-
-    def __init__(self, app: ASGIApp, db_path: Path) -> None:
-        self.app, self.db_path = app, db_path
-
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if (
-            scope["type"] == "http"
-            and sealed_write(str(scope.get("method", "")), str(scope.get("path", "")))
-            and await run_in_threadpool(lifecycle.sealed_path, self.db_path)
-        ):
-            await sealed_response()(scope, receive, send)
-            return
-        await self.app(scope, receive, send)
-
-
-# What an heir's request may reach (P2.4): talking with the twin and reading, through the heir's tier, what the will
-# gives them; their own conversations. Everything else is refused, whatever it is, so a route added later is refused
-# too until it is put here, with its reads filtered for an heir (the list is checked in ``tests/test_heirs.py``).
-# What only the person may see or do (剖析观察、照镜子、自评、人生回顾、补一补, the will, the ledger, settings) is
-# never here. Paths are matched whole; ``{}`` is one segment.
-HEIR_ALLOWED: tuple[tuple[str, str], ...] = (
-    ("POST", "/api/persona/chat"),
-    ("POST", "/api/persona/chat/stream"),
-    ("GET", "/api/persona/items"),
-    ("GET", "/api/persona/items/search"),
-    ("GET", "/api/persona/items/summary"),
-    ("GET", "/api/persona/sources/{}/text"),
-    ("GET", "/api/persona/coverage"),
-    ("GET", "/api/persona/life-story"),
-    ("GET", "/api/conversations"),
-    ("POST", "/api/conversations"),
-    ("GET", "/api/conversations/{}"),
-    ("PATCH", "/api/conversations/{}"),
-    ("DELETE", "/api/conversations/{}"),
-    # Who is asking (the heir, not the person) and their way in and out (P2.7).
-    ("GET", "/api/whoami"),
-    ("POST", "/api/heir/open"),
-    ("POST", "/api/heir/leave"),
-)
-_HEIR_ALLOWED = [
-    (method, re.compile("^" + re.escape(path).replace(re.escape("{}"), "[^/]+") + "$")) for method, path in HEIR_ALLOWED
-]
-
-
-def heir_allowed(method: str, path: str) -> bool:
-    """Whether an heir's request of ``method`` to ``path`` may go on: every page and asset, and of the API only
-    ``HEIR_ALLOWED``."""
-    if not path.startswith("/api/"):
-        return True
-    return any(method == m and pattern.match(path) for m, pattern in _HEIR_ALLOWED)
-
-
-class HeirMiddleware:
-    """Refuse an heir's request (``conversations.HEIR_SCOPE``) to anything but ``HEIR_ALLOWED``, with 403
-    ``heir_forbidden``. It sits right inside sign-in, before the twin's routes and the app's own (the library, the
-    settings), so nothing else an heir could reach reads the person's memory unfiltered."""
-
-    def __init__(self, app: ASGIApp) -> None:
-        self.app = app
-
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if (
-            scope["type"] == "http"
-            and scope.get(HEIR_SCOPE)
-            and not heir_allowed(str(scope.get("method", "")), str(scope.get("path", "")))
-        ):
-            await JSONResponse({"detail": "这里只有本人能看", "code": "heir_forbidden"}, status_code=403)(
-                scope, receive, send
-            )
-            return
-        await self.app(scope, receive, send)
-
-
 def sse_event(event: str, data: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False, separators=(',', ':'))}\n\n"
 
@@ -642,10 +539,6 @@ def register(
 
     def automatic_build(log: Log) -> dict[str, Any]:
         with open_store() as store:
-            # A build queued before the memory was sealed, or by anything after it, does nothing (``lifecycle``).
-            if lifecycle.sealed(store):
-                log("记忆已冻结，不再整理")
-                return {"sealed": True}
             ids = [
                 s.source_id
                 for s in store.list_sources()
@@ -723,9 +616,6 @@ def register(
     from . import companion as companion_routes
 
     companion_routes.register(app, ingestion.lock, open_store)
-    from . import will as will_routes
-
-    will_routes.register(app, ingestion.lock, open_store)
     from . import claims
 
     claims.register(app, settings, ingestion)
@@ -746,14 +636,6 @@ def register(
 
     def resume_processing() -> None:
         if not settings.db_path.is_file():
-            return
-        with open_store() as store:
-            sealed = lifecycle.sealed(store)
-        if sealed:
-            # Opening the store moved its facet ids to the running taxonomy, without any model call; a sealed memory
-            # is not imported into, extracted or merged again (``lifecycle``). Its retrieval vectors are still brought
-            # up to date: they only find what it holds.
-            resume_index()
             return
         with open_store() as store:
             stale = profile_stale(store)
@@ -921,16 +803,6 @@ def register(
                 raise HTTPException(404, "找不到这条记忆")
             # The person's own text as written, dreams included and marked: the twin does not read them.
             expressions = expression_view(store, settings, source_id=source_id, mirror=True)
-            if is_heir(audience):
-                # An heir reads only the words the will gives them, none about a topic not to be talked about; a
-                # memory with none of them does not show that it exists.
-                hidden = heirs.hidden_words(store, audience)
-                avoid = given.avoid if (given := heirs.grant(store, audience)) is not None else ()
-                expressions = [
-                    e for e in expressions if e.expression_id not in hidden and not heirs.mentions(e.text, avoid)
-                ]
-                if not expressions:
-                    raise HTTPException(404, "找不到这条记忆")
             speaker_lines = source.kind in {SourceKind.CHAT, SourceKind.INTERVIEW, SourceKind.AUDIO, SourceKind.VIDEO}
             return "\n\n".join(
                 (f"{e.context}\n" if e.context and not source.media_sha else "")
@@ -1083,13 +955,10 @@ def register(
     def hidden_words(store: PersonaStore, request: Request) -> PrivateWords:
         """The words the viewer may not be shown in an item's evidence: the notes the person kept to themself, for a
         viewer of the colleague tier (an item opened to colleagues may still quote one), none for the person. An item
-        a colleague can see is of their tier, so no other words of it are private. An heir is shown only the words the
-        will gives them (``heirs.hidden_words``)."""
+        a colleague can see is of their tier, so no other words of it are private."""
         audience = request_audience(request)
         if audience == SELF:
             return PrivateWords()
-        if is_heir(audience):
-            return heirs.hidden_words(store, audience)
         return PrivateWords(sources=frozenset(store.private_note_sources()))
 
     def item_view(i: PersonaItem, tiers: dict[str, Tier], hidden: PrivateWords) -> dict[str, Any]:
@@ -1129,10 +998,6 @@ def register(
         facet_ids = [f.facet_id for f in FACETS if f.dimension_id in set(dimension)] if dimension else None
         audience = request_audience(request)
         with open_store() as store:
-            given = heirs.grant(store, audience)
-            # An heir's page leaves out the items about a topic not to be talked about, which SQL cannot tell: all the
-            # items the will gives are read, then paged (a person's items are a few thousand at most).
-            whole = given is not None and bool(given.avoid)
             items, total = store.query_items(
                 facet_ids=facet_ids,
                 review=review,
@@ -1141,14 +1006,10 @@ def register(
                 conflict=conflict,
                 by_evidence=sort == "evidence",
                 include_rejected=include_rejected,
-                limit=None if whole else limit,
-                offset=0 if whole else offset,
+                limit=limit,
+                offset=offset,
                 audience=audience,
-                grant=given,
             )
-            if whole and given is not None:
-                items = [i for i in items if not heirs.mentions(heirs.item_words(i), given.avoid)]
-                total, items = len(items), items[offset : offset + limit]
             tiers = store.item_tiers()
             hidden = hidden_words(store, request)
             views = [item_view(i, tiers, hidden) for i in items]
@@ -1190,17 +1051,8 @@ def register(
         disagrees (worth a look, never a queue to work through)."""
         with open_store() as store:
             audience = request_audience(request)
-            if is_heir(audience):
-                # Counted from the items themselves, without those about a topic not to be talked about.
-                usable = heirs.usable_items(store, store.list_items(), audience)
-                per_facet: dict[str, int] = {}
-                for i in usable:
-                    per_facet[i.facet_id] = per_facet.get(i.facet_id, 0) + 1
-                counts = {(f, ReviewStatus.UNREVIEWED): n for f, n in per_facet.items()}
-                conflicts = sum(1 for i in usable if i.conflict)
-            else:
-                counts = store.item_counts(audience)
-                _, conflicts = store.query_items(conflict=True, limit=0, audience=audience)
+            counts = store.item_counts(audience)
+            _, conflicts = store.query_items(conflict=True, limit=0, audience=audience)
         totals: dict[str, int] = {}
         for (facet_id, status), n in counts.items():
             if status is ReviewStatus.REJECTED or facet_id not in FACET_BY_ID:
@@ -1254,12 +1106,11 @@ def register(
     @app.get("/api/persona/coverage")
     def get_coverage(request: Request, as_of: str | None = None) -> dict[str, Any]:
         """What the twin knows per facet, of the memories the viewer may see: the person sees all of it, anyone else
-        only the colleague tier, which can be less, and an heir what the will gives them, without what was asked of
-        the twin (the questions are the person's and their colleagues')."""
+        only the colleague tier, which can be less."""
         audience = request_audience(request)
         with open_store() as store:
-            items = heirs.usable_items(store, store.list_items(), audience)
-            demand = None if is_heir(audience) else store.chat_demand()
+            items = usable_items(store, store.list_items(), audience)
+            demand = store.chat_demand()
             report = coverage_report(items, consented_facets(store), _date(as_of, "as_of"), demand=demand)
         data = report.model_dump(mode="json")
         data["level_labels"] = LEVEL_LABELS
@@ -1294,11 +1145,9 @@ def register(
         messages = validate_chat(body)
         email = owner(request)
         audience = index.audience(body.conversation_id, request_audience(request))
-        # An heir's conversation hands nothing to the person and is shown none of the team's answers.
-        asker = None if is_heir(audience) else (desk, request_asker_name(request))
+        asker = (desk, request_asker_name(request))
         assistant = audience == SELF and bool(request.scope.get("twin_person"))
         as_of = body.as_of if assistant else None
-        farewell = None if in_crisis(messages[-1].content) else farewell_for(audience, False)
         with open_store() as store:
             if assistant:
                 keep_as_of(store, body.conversation_id, email, as_of)
@@ -1306,12 +1155,6 @@ def register(
                 append_user(store, body.conversation_id, email, messages[-1].content, index)
                 payload = {**chat_payload(store, crisis_reply(), audience=audience), "crisis": True}
                 return JSONResponse(append_reply(store, body.conversation_id, email, payload, index), status_code=200)
-            if farewell is not None:
-                append_user(store, body.conversation_id, email, messages[-1].content, index)
-                payload = {**chat_payload(store, farewell, audience=audience), "farewell": True}
-                kept = append_reply(store, body.conversation_id, email, payload, index)
-                keep_farewell(store, audience)
-                return JSONResponse(kept, status_code=200)
             if not store.has_items():
                 append_user(store, body.conversation_id, email, messages[-1].content, index)
                 reply = no_profile_reply(store, as_of)
@@ -1362,27 +1205,11 @@ def register(
         question keeps nothing, as always."""
         return fixed_response(crisis_reply(), "crisis", message, body, email, audience)
 
-    def farewell_for(audience: Audience, preview: bool) -> ChatReply | None:
-        """退场 (``persona.retirement``): the goodbye an heir past their day to leave is told, once; a rehearsal shows
-        it each time. None for anyone else; 403 once it was said, the heir's conversations staying to read."""
-        with open_store() as store:
-            heir = retirement.leaving(store, audience, dt.date.today())
-            if heir is None:
-                return None
-            if not preview and retirement.said(store, heir.heir_id):
-                raise HTTPException(403, retirement.RETIRED)
-            return retirement.farewell_reply(heir, store)
-
-    def keep_farewell(store: PersonaStore, audience: Audience) -> None:
-        if (heir_id := heir_of(audience)) is not None:
-            retirement.say_farewell(store, heir_id, dt.datetime.now(dt.UTC))
-
     def fixed_response(
         reply: ChatReply, flag: str, message: str, body: ChatBody, email: str | None, audience: Audience
     ) -> StreamingResponse:
         """A reply said as it is, before anything is looked up or any model asked, marked ``flag`` for the page: kept
-        in the conversation like any other, or nothing of it with a trial question. A goodbye (``farewell``) is kept
-        as said."""
+        in the conversation like any other, or nothing of it with a trial question."""
 
         def keep() -> dict[str, Any]:
             with open_store() as store:
@@ -1391,10 +1218,7 @@ def register(
                 if body.preview:
                     return payload
                 append_user(store, body.conversation_id, email, message, index)
-                kept = append_reply(store, body.conversation_id, email, payload, index)
-                if flag == "farewell":
-                    keep_farewell(store, audience)
-                return kept
+                return append_reply(store, body.conversation_id, email, payload, index)
 
         async def events() -> AsyncGenerator[str]:
             yield ": connected\n\n"
@@ -1415,15 +1239,13 @@ def register(
     def note_response(note: str, message: str, body: ChatBody, email: str | None) -> StreamingResponse:
         """The person asked the assistant to remember something (``记一下``): it is kept as a note, in the tier that is
         theirs alone until they choose, and answered at once; nothing is asked of the model, so nothing is lost to a
-        reply that did not take it down. A sealed memory keeps no note and says so."""
+        reply that did not take it down."""
 
         def keep() -> dict[str, Any]:
             with open_store() as store:
                 append_user(store, body.conversation_id, email, message, index)
-                sealed = lifecycle.sealed(store)
-                payload = chat_payload(store, note_reply(sealed), audience=SELF)
-                if not sealed:
-                    payload["note"] = keep_note(store, settings, note)
+                payload = chat_payload(store, note_reply(), audience=SELF)
+                payload["note"] = keep_note(store, settings, note)
                 payload["completed_at"] = dt.datetime.now(dt.UTC).isoformat(timespec="milliseconds")
                 return append_reply(store, body.conversation_id, email, payload, index)
 
@@ -1529,19 +1351,6 @@ def register(
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
-    def rehearsed_heir(request: Request, heir_id: str) -> Audience:
-        """The audience of 预演 (P2.6) as ``heir_id``: only the person may rehearse an heir's conversation, only while
-        they are alive (a sealed will can no longer be changed for what the rehearsal shows; 423), and only of an heir
-        the will names (404)."""
-        person(request)
-        with open_store() as store:
-            lifecycle.refuse_if_sealed(store)
-            try:
-                will.get(store, heir_id)
-            except KeyError:
-                raise HTTPException(404, "找不到这位继承人，请刷新后重试") from None
-        return heir_audience(heir_id)
-
     def stream_chat_response(
         body: ChatBody, request: Request, attachment_passages: Sequence[AttachmentPassage] = ()
     ) -> StreamingResponse:
@@ -1553,25 +1362,15 @@ def register(
         asker_name = request_asker_name(request)
         ledger = audience == SELF and not request.scope.get("twin_visitor")
         preview = body.preview
-        if body.heir is not None and not preview:
-            raise HTTPException(400, "预演要带 preview")
-        if preview and body.heir is not None:
-            # 预演: the rehearsal as this heir would have it, answered from what the will gives them; nothing saved.
-            audience, ledger = rehearsed_heir(request, body.heir), False
-        elif preview:
+        if preview:
             # 看同事会得到什么: the last message alone, answered from the colleague tier, with nothing saved.
             person_only(request)
             audience, ledger, messages = COLLEAGUE, False, messages[-1:]
         # Before anything else, whoever asks: a message of ending one's life or harming oneself stops here.
         if in_crisis(messages[-1].content):
             return crisis_response(messages[-1].content, body, email, audience)
-        # An heir past their day to leave is told goodbye, once, and answered no more (P2.8).
-        if (farewell := farewell_for(audience, preview)) is not None:
-            return fixed_response(farewell, "farewell", messages[-1].content, body, email, audience)
         # The person's own conversation is answered by their assistant, which also takes down notes and promises.
         assistant = audience == SELF and bool(request.scope.get("twin_person")) and not preview
-        # An heir's conversation hands nothing to the person and is shown none of the team's answers.
-        heir = is_heir(audience)
         # 时间切片 is the person's own: anyone else's conversation, and a trial as a colleague, answer as of now.
         as_of = body.as_of if assistant else None
         if assistant:
@@ -1631,7 +1430,7 @@ def register(
                 email,
                 payload,
                 index,
-                None if heir else (desk, asker_name, audience),
+                (desk, asker_name, audience),
                 assistant=assistant,
             )
 
@@ -1651,7 +1450,7 @@ def register(
                 return
             # Waits, with heartbeats, for one of the chat worker slots that chat jobs use too.
             async with ticket.running():
-                if desk.answers is not None and not heir:
+                if desk.answers is not None:
                     asked = question_of([m.content for m in messages if m.role == "user"])
                     shown.extend(
                         await off_loop(
@@ -1669,10 +1468,10 @@ def register(
                             settings,
                             ledger=ledger,
                             audience=audience,
-                            reach="none" if heir else desk.reach(None if preview else email),
+                            reach=desk.reach(None if preview else email),
                             assistant=assistant,
-                            # 看同事会得到什么 is asked by nobody in particular, nor is anyone known to an heir's.
-                            asker=None if preview or heir else chat_asker(desk, email, asker_name),
+                            # 看同事会得到什么 is asked by nobody in particular.
+                            asker=None if preview else chat_asker(desk, email, asker_name),
                             reflection=body.reflection,
                         )
                     )

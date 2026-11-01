@@ -1,7 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import {
   awayMerged,
-  heirConversation,
   lensChoices,
   lensList,
   mockApi,
@@ -11,7 +10,6 @@ import {
   personas,
   status,
   weekly,
-  willRehearsal,
 } from './mockApi';
 
 // Each key page, on a desktop and a 375px phone (see playwright.config.ts). `ready` is text that only shows once
@@ -487,8 +485,6 @@ const pages: {
       // 记忆 as a constellation of the ten aspects, and 资料 under the core, each piece as the thing it is.
       ['member-persona', '/#/profile', '十个方面', ''],
       ['member-persona-sources', '/#/memories', '已添加的记忆', ''],
-      // 数字遗嘱 in its side layer over the chat: one row per heir, the history folded.
-      ['will-persona', '/#/chat?will=', '加继承人', ''],
     ] as const
   ).map(([name, path, ready, conversation]) => ({
     name,
@@ -511,111 +507,6 @@ const pages: {
       }, conversation);
     },
   })),
-  // An heir who opened the twin (P2.7): their own conversation alone, saying whose memory it carries on.
-  {
-    name: 'chat-heir',
-    path: '/#/chat',
-    ready: '认准了就不撒手',
-    setup: async (page: Page) => {
-      await page.emulateMedia({ reducedMotion: 'reduce' });
-      await page.route('**/api/whoami', (route) =>
-        route.fulfill({
-          json: {
-            email: null,
-            admin: false,
-            auth_enabled: false,
-            edition: 'persona',
-            heir: {
-              id: 'heir_yu',
-              name: '小雨',
-              person: '林舟',
-              persona: 'default',
-            },
-          },
-        }),
-      );
-      await page.route('**/api/conversations', (route) =>
-        route.fulfill({
-          json: [
-            {
-              id: heirConversation.id,
-              title: heirConversation.title,
-              updated_at: '2026-10-17T01:30:08Z',
-            },
-          ],
-        }),
-      );
-      await page.addInitScript((opened) => {
-        localStorage.setItem(
-          'twin.heir:heir_yu:default:twin.current.conversation',
-          opened,
-        );
-      }, heirConversation.id);
-    },
-  },
-  // The twin has said goodbye to the heir (P2.8): what was said stays to read, and nothing more is asked.
-  {
-    name: 'chat-heir-gone',
-    path: '/#/chat',
-    ready: '认准了就不撒手',
-    setup: async (page: Page) => {
-      await page.emulateMedia({ reducedMotion: 'reduce' });
-      await page.route('**/api/whoami', (route) =>
-        route.fulfill({
-          json: {
-            email: null,
-            admin: false,
-            auth_enabled: false,
-            edition: 'persona',
-            heir: {
-              id: 'heir_yu',
-              name: '小雨',
-              person: '林舟',
-              persona: 'default',
-              gone: true,
-            },
-          },
-        }),
-      );
-      await page.route('**/api/conversations', (route) =>
-        route.fulfill({
-          json: [
-            {
-              id: heirConversation.id,
-              title: heirConversation.title,
-              updated_at: '2026-10-17T01:30:08Z',
-            },
-          ],
-        }),
-      );
-      await page.addInitScript((opened) => {
-        localStorage.setItem(
-          'twin.heir:heir_yu:default:twin.current.conversation',
-          opened,
-        );
-      }, heirConversation.id);
-    },
-  },
-  // The person's own twin once sealed (P2.7): this computer is the heirs' way in and nothing else.
-  {
-    name: 'heirs-only',
-    path: '/#/chat',
-    ready: '记忆已冻结',
-    setup: async (page: Page) => {
-      await page.emulateMedia({ reducedMotion: 'reduce' });
-      await page.route('**/api/whoami', (route) =>
-        route.fulfill({
-          json: {
-            email: null,
-            admin: true,
-            auth_enabled: false,
-            edition: 'persona',
-            sealed: true,
-          },
-        }),
-      );
-    },
-  },
 ];
 
 for (const { name, path, ready, viewport, setup } of pages) {
@@ -640,133 +531,6 @@ for (const { name, path, ready, viewport, setup } of pages) {
     expect(missing, 'requests without a mock in e2e/mockApi.ts').toEqual([]);
   });
 }
-
-test('rehearse an heir: answered as the will gives, what was left out named', async ({
-  page,
-}, info) => {
-  const missing: string[] = [];
-  const errors: string[] = [];
-  page.on('pageerror', (error) => errors.push(error.message));
-  await page.clock.setFixedTime(NOW);
-  await mockApi(page, missing);
-  await page.emulateMedia({ reducedMotion: 'reduce' });
-  await page.route('**/api/whoami', (route) =>
-    route.fulfill({
-      json: {
-        email: null,
-        admin: true,
-        auth_enabled: false,
-        edition: 'persona',
-      },
-    }),
-  );
-  await page.route('**/api/persona/chat/stream', (route) => {
-    const sent = route.request().postDataJSON() as {
-      messages: { content: string }[];
-    };
-    return route.fulfill({
-      contentType: 'text/event-stream',
-      body: willRehearsal(sent.messages[sent.messages.length - 1].content),
-    });
-  });
-  await page.goto('/#/chat?will=');
-  const will = page.getByRole('dialog', { name: '数字遗嘱' });
-  await will.getByLabel('小雨的操作').click();
-  await will.getByRole('button', { name: '预演' }).click();
-  // A question answered from what the will gives her, then one about a topic it says not to talk about.
-  const panel = page.getByRole('dialog', { name: '预演 · 小雨' });
-  const input = panel.getByLabel('以小雨的身份问');
-  await input.fill('爸，你周末一般做什么？');
-  await input.press('Enter');
-  await expect(panel.getByLabel('没给小雨的')).toContainText('底线与原则');
-  await input.fill('你和妈妈那段婚姻呢？');
-  await input.press('Enter');
-  await expect(panel.getByText(/不和你谈/)).toBeVisible();
-  await page.evaluate(() => document.fonts.ready);
-  await expect(page).toHaveScreenshot(
-    `will-rehearsal-${info.project.name}.png`,
-  );
-  expect(errors, 'page errors').toEqual([]);
-  expect(missing, 'requests without a mock in e2e/mockApi.ts').toEqual([]);
-});
-
-test('name an heir: the aspects they may use', async ({ page }, info) => {
-  const missing: string[] = [];
-  const errors: string[] = [];
-  page.on('pageerror', (error) => errors.push(error.message));
-  await page.clock.setFixedTime(NOW);
-  await mockApi(page, missing);
-  await page.emulateMedia({ reducedMotion: 'reduce' });
-  await page.route('**/api/whoami', (route) =>
-    route.fulfill({
-      json: {
-        email: null,
-        admin: true,
-        auth_enabled: false,
-        edition: 'persona',
-      },
-    }),
-  );
-  await page.goto('/#/chat?will=');
-  const will = page.getByRole('dialog', { name: '数字遗嘱' });
-  await will.getByLabel('小雨的操作').click();
-  await will.getByRole('button', { name: '修改' }).click();
-  // The second step: whole aspects ticked, one facet of another, that aspect opened to its facets.
-  const editor = page.getByRole('dialog', { name: '小雨' });
-  await editor.getByRole('button', { name: '下一步' }).click();
-  await editor.getByRole('button', { name: /^怎么做决定里的各项/ }).click();
-  await expect(
-    editor.getByRole('checkbox', { name: '风险偏好' }),
-  ).toBeChecked();
-  await page.evaluate(() => document.fonts.ready);
-  await expect(page).toHaveScreenshot(`will-heir-${info.project.name}.png`);
-  expect(errors, 'page errors').toEqual([]);
-  expect(missing, 'requests without a mock in e2e/mockApi.ts').toEqual([]);
-});
-
-// 我是继承人 (P2.7), on the persona edition's side bar (which phones do not have): the name and word, then the seal said
-// once before anything opens.
-test('heir door: the seal is said before it opens', async ({ page }, info) => {
-  test.skip(info.project.name === 'mobile', 'the side bar is for desktops');
-  const missing: string[] = [];
-  const errors: string[] = [];
-  page.on('pageerror', (error) => errors.push(error.message));
-  await page.clock.setFixedTime(NOW);
-  await mockApi(page, missing);
-  await page.emulateMedia({ reducedMotion: 'reduce' });
-  await page.route('**/api/whoami', (route) =>
-    route.fulfill({
-      json: {
-        email: null,
-        admin: true,
-        auth_enabled: false,
-        edition: 'persona',
-      },
-    }),
-  );
-  await page.goto('/#/chat');
-  // The page behind the door settles first: the empty chat and the list beside it.
-  await expect(page.getByText('和林舟聊聊').first()).toBeVisible();
-  await expect(page.getByText('招聘面试的问题').first()).toBeVisible();
-  await page.getByRole('button', { name: '我是继承人' }).click();
-  const door = page.getByRole('dialog', { name: '我是继承人' });
-  await door.getByLabel('称呼').fill('小雨');
-  await door.getByLabel('口令').fill('开启口令123');
-  await page.evaluate(() => document.fonts.ready);
-  await expect(page).toHaveScreenshot(`heir-door-${info.project.name}.png`, {
-    timeout: 15_000,
-  });
-  await door.getByRole('button', { name: '进入' }).click();
-  await expect(
-    page.getByRole('dialog', { name: '开启后记忆冻结' }),
-  ).toBeVisible();
-  await expect(page).toHaveScreenshot(
-    `heir-door-confirm-${info.project.name}.png`,
-    { timeout: 15_000 },
-  );
-  expect(errors, 'page errors').toEqual([]);
-  expect(missing, 'requests without a mock in e2e/mockApi.ts').toEqual([]);
-});
 
 test('team continues the roster when its last rows scroll into view', async ({
   page,

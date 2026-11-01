@@ -21,62 +21,6 @@ Positioning: Identity → Memory upload → Service. Repository, project, Python
 - `[kernel] auto_rebuild=true`、`max_auto_rebuild_chunks=400`、`max_concurrent`（整理记忆时同时发给模型的请求数，1–64，未设时等于 `max_workers`；每次调用前读取，改了对正在进行的整理也生效）；启动时有内核差异且禁用自动重建或待重抽数量超过阈值时等待确认。`GET /api/status` 返回 `kernel: {version, built, scope, pending_chunks, state}`，state 为 ready/pending/queued/running/error/awaiting_confirmation；version/built 为版本对象，未记录 built 为 null；还没有资料和条目的分身 scope 为 none。三个 `[kernel]` 参数可在设置「记忆」里由管理员改写（`data/system.json`，立即生效）。`processing.notice` 在等待确认时为“记忆内核已升级，需要管理员确认后重新整理；目前沿用旧档案”。
 - `POST /api/kernel/rebuild` 使用当前分身，要求管理员及 `X-Twin: 1`，返回 202 `{job_id}`；复用原有互斥构建任务。设置「记忆」用 `GET/POST /api/admin/system/components[/kernel]` 一次查看和升级所有分身（见 WEB_UI.md）。`twin kernel status` 逐分身显示版本、数据库实际 schema、范围和分段数；`twin kernel rebuild [--persona ID|--all] [--yes]` 默认配置分身，超过阈值必须显式 `--yes`。
 
-## 生前 / 身后与冻结（P2.5）
-
-- `persona.lifecycle`（代码层 4）：状态记在分身库 `p_meta`，不需要迁移、随数据库一起拷走。`lifecycle` 为 `alive`（没有这个键时也是）或 `sealed`；`lifecycle:sealed_at` 是冻结时间（UTC，ISO 8601，到秒），只在 `sealed` 时有意义。`state` / `sealed` / `sealed_at` 读状态，`sealed_path(db_path)` 只读打开、不迁移，供每个请求检查；`refuse_if_sealed` 冻结时抛 `MemorySealed`。
-- `seal(store)` 由继承人第一次开启（P2.7，见下）调用，没有别的网页入口：先 `store.snapshot("sealed")`（`kernel-snapshots/<库名>-<时间>-sealed.db`，0600），再在同一事务里写两个键，返回快照路径；已冻结时什么都不做，返回 null。冻结前的快照不计入“每个分身保留最近 3 份”，之后的迁移、重整、恢复快照都不会把它挤掉。冻结不可在网页上撤回，回退见 `docs/LOCAL_DEV.md#回退记忆内核`。
-- **拒绝写入**：分身应用里的 `SealedMiddleware`（与 `MemoryGateMiddleware` 同一层）对 `/api/persona`、`/api/uploads`、`/api/identity`、`/api/me`、`/api/kernel` 下除 GET/HEAD/OPTIONS 以外的所有请求，除 `/api/persona/chat`（含 `stream`、`stream-with-files`）外，在冻结后一律返回 **423** `{"detail": "记忆已冻结，不能再改动", "code": "memory_sealed"}`，不进路由、不改库。按前缀默认拒绝，以后新加的写接口同样被拒；完整清单在 `tests/test_lifecycle.py` 的 `SEALED` / `OPEN`，新接口必须归入其一。照常的写：对话（`/api/persona/chat*`）、会话本身（`/api/conversations`）、朗读和视频（`/api/media/*`）、渠道（`/api/channels/wecom`）。路由里抛出的 `MemorySealed` 同样回 423。
-- **对话不留痕**：`PersonaChat` 在冻结时照常检索和回答，但不写 `p_chat_log`（所以覆盖度的提问需求 `chat_demand` 不再增加）、不产生承诺（`promise_*` 为空，`record_promise` 对冻结的库也什么都不做）；“记一下”回固定的 `SEALED_NOTE_REPLY`“记忆已经冻结，这句不会记下。”，元数据没有 `note`，不新增来源、不排队整理。会话的提问和回答仍存进会话（`conversation_turns`），之后可以翻看。
-- **后台和命令行**：冻结后 `stale_reason` 为 null、`GET /api/status` 的 `kernel.scope` 为 `none`；启动时只做打开数据库时不调用模型的细项编号迁移，不恢复中断的导入、不重新抽取或合并、不排队整理，检索向量照常按当前向量模型补齐（只找已有的内容）。排队中的整理执行时直接返回 `{"sealed": true}`；`build_profile` 对冻结的库抛 `MemorySealed`；录音库不再向冻结的分身写资料；承诺账本的整理（包括系统设置里的升级）被拒。`twin persona import|note|reextract|build` 和 `twin kernel rebuild --persona` 失败退出（“记忆已冻结，不能再改动”），`twin kernel rebuild --all` 跳过冻结的分身；`twin persona chat`、服务接口 `/v1/ask`、MCP 和渠道照常回答，同样不留痕。`twin kernel restore` 不受冻结限制。
-
-## 继承人受众档（P2.4）
-
-- **受众档**（`persona/tiers.py`）：`Audience` 是字符串，`self`、`colleague` 或 `heir:<heir_id>`（`heir_audience` / `heir_of` / `is_heir`）。
-  继承人得到什么由遗嘱定（`HeirGrant`：`facets` 全部给的细项、`single` 其中单独点名的细项、`avoid` 不谈的话题），由 `persona/heirs.py`
-  的 `grant(store, audience)` 读遗嘱得出；本人和同事档返回 null。遗嘱里没有这位继承人（删掉了或编号不对）、或遗嘱读不出来，返回空的
-  `NOTHING`：什么都不给。
-- **条目**（`tiers.heir_usable`）：细项在 `facets` 里才给；细项的默认档是对同事说的，不影响继承人（遗嘱给了家庭，家庭的条目就给）；
-  本人逐条标了“只有本人能用”的条目（`p_item_tiers` 里是 `self`）不给，**除非**遗嘱单独点名了它的细项（`facets` 字段，而不是整个方面）。
-  `tiers.for_audience(items, overrides, audience, grant)`：继承人档不传 `grant` 时一条都不给。`PersonaStore.query_items` /
-  `item_counts` 多 `grant` 参数，SQL 条件与 `heir_usable` 相同（`_audience_sql`），不传同样什么都不给。
-- **原话**（`tiers.heir_words`）：继承人只看得到给他的条目（复核为拒绝的除外）所依据的原话，`PrivateWords.allowed` 是白名单，其余一律算隐藏：
-  不站在任何条目下的话、别人说的话（除非是给他的条目的依据）、不给的条目的依据都不给。本人“只有本人能用”的笔记（`note_tier`）的话，
-  只有单独点名的细项的条目才能带出来。`heirs.hidden_words(store, audience)` 按档给出隐藏的原话（本人无、同事 `private_words`、继承人 `heir_words`）。
-- **不谈的话题**（`persona/heirs.py`）：词面先拦（`topic_terms`：按“的、和、关于、……的事”等虚词切开，留两个字以上的部分，三个字以上的中文
-  再加末两字，例如“前一段婚姻”→“前一段婚姻”“婚姻”；只有一个字时用这个字；英文按整词；宁可多拦），向量补充（向量服务可用时，问题或候选与
-  任一话题的余弦 ≥ `TOPIC_SIMILARITY` = 0.6；不可用时只靠词面）。
-  - 提问：`PersonaChat.reply` / `stream_reply` 在危机护栏之后、其他一切之前，看最近两条提问（检索用的就是它们）是否命中，命中回固定的
-    `AVOIDED_REPLY`“这件事{本人名字}生前交代过，不和你谈。我们聊点别的吧。”（`mode=general`，无引用、无检索、不调用模型、不记 `p_chat_log`，
-    不说是哪个话题）。危机护栏仍在最前面。
-  - 检索结果：继承人的检索材料里，条目（陈述和引文）、本人原话、别人的话按词面和向量命中的都去掉；条目证据里按向量去掉的原话也去掉。
-    `heirs.usable_items` 在网页的条目、覆盖度、生命线里按词面去掉命中的条目。
-  - 提示词：`chat_system_prompt` 在 `ctx.avoid` 非空时加“## 不谈的话题”一节，列出话题，要求不谈、不暗示、不自己说出话题名。
-- **继承人的对话**：没有承诺账本、没有本人助手、`reach` 为 `none`（不转交、不显示团队答案）、不给会议纪要（`_minutes` 的纪要不站在任何细项下）；
-  引用只留检索到的编号（`ctx.ids`），`cited_view` 再按继承人档过滤一次，伪造的编号不显示。检索材料按记忆版本缓存，遗嘱不在记忆版本里，
-  所以 `HeirGrant` 是缓存键的一部分：改遗嘱后下一个问题就按新遗嘱答。
-- **网页**：请求的 `scope["twin_heir"]`（`conversations.HEIR_SCOPE`，P2.7 开启后设置）是继承人编号时，`request_audience` 是 `heir:<id>`，
-  优先于其他一切；`owner(request)` 也是 `heir:<id>`，所以每位继承人只看得到自己的会话，也打不开本人或别人的会话（404）。团队库的会话索引只认
-  `self` / `colleague`，继承人的会话记成 `colleague`（`heirs.tier_only`），回答时 `ConversationIndex.audience` 一律按请求里的继承人档。
-  `HeirMiddleware`（主应用里，紧挨登录之后、分身路由之前）对继承人的 API 请求**默认拒绝**，403 `{"detail": "这里只有本人能看", "code": "heir_forbidden"}`，
-  只放过 `web/persona.py` 的 `HEIR_ALLOWED`（清单在 `tests/test_heirs.py` 里和全部路由核对）：
-  `POST /api/persona/chat`、`/chat/stream`；`GET /api/persona/items`、`/items/search`、`/items/summary`（按遗嘱、去掉不谈话题的条目计数；
-  搜索的词本身命中不谈的话题时返回空）；`GET /api/persona/sources/{id}/text`（只留给他的原话，没有一句时 404）；`GET /api/persona/coverage`
-  （按给他的条目算，不带提问需求）；`GET /api/persona/life-story`（同上，本人以外只有继承人能读）；`/api/conversations` 的列表、新建、读、改名、删除。
-  页面和静态资源不受影响。
-
-## 退场（P2.8）
-
-- `persona/retirement.py`。遗嘱里 `retire_on`（含当天）起，这位继承人的下一次 `POST /api/persona/chat` 或 `/chat/stream`
-  （危机护栏之后、任何检索和模型之前）回 `farewell`（本人写的告别语，没写时 `DEFAULT_FAREWELL`），回复多 `farewell: true`，存进对话；
-  `p_meta` 的 `heir_farewell:<heir_id>` 记下说过的时间（UTC ISO 8601）。
-- 说过以后：对话 403 `{"detail": "这段延续已经结束，以前的对话还能翻看"}`；`POST /api/conversations`、`PATCH` / `DELETE /api/conversations/{id}`
-  同样 403；`GET` 照常。`GET /api/whoami` 的 `heir` 多 `gone: bool`（`heir_door.Session.gone`）。没有 `retire_on` 不退场。
-- 预演（`preview` + `heir`）一位过了日期的继承人：每次都回告别，`farewell: true`，不记任何东西。
-- 告别后附本人原话（P3.6）：`Heir.farewell_words` 是至多 2 个表达编号（`MAX_FAREWELL_WORDS`），默认空，旧遗嘱照读。新选的必须在
-  `companion.own_words` 里（本人自己说的、维度 2、3 的原话），否则 400“只能附你自己说过的话”；以前选的照留，重新整理后不在了的告别时略过。
-  告别语后空一行接 `LEFT_WORDS`“我说过的话，留给你：”和每句“原话”（日期）。`GET /api/persona/will/words` → `{words: [{id, quote, date}]}`，
-  至多 30 条，说得最多的在前，只给本人。
-
 ## 节奏提醒（P3.6）
 
 - `persona/pace.py`（代码层 4）。`p_meta` 的 `pace` 是 `{kind: "off" | "daily_minutes" | "weekly_times", limit: 1–1440}`（默认 off、30），
@@ -84,7 +28,7 @@ Positioning: Identity → Memory upload → Service. Repository, project, Python
   一次的长度从第一句到最后一句再加 1 分钟；“今天”和“这周”（周一起）按本机时区，前一晚跨过零点的只算今天的部分。
   每天：今天的分钟数 ≥ limit 时提醒；每周：这周的次数 > limit 时提醒；当天选过继续就不再提醒。
 - `GET /api/persona/pace` → `{pace, used: {minutes_today, times_week} | null, reminder: string | null}`（off 时 `used` 为 null）；
-  `PUT /api/persona/pace` 收 `pace`，返回同样的结构；`POST /api/persona/pace/go-on` 记下今天继续。只给本人，冻结后写入 423。
+  `PUT /api/persona/pace` 收 `pace`，返回同样的结构；`POST /api/persona/pace/go-on` 记下今天继续。只给本人。
 
 ## 告别一种陪伴（P3.6）
 
@@ -93,21 +37,7 @@ Positioning: Identity → Memory upload → Service. Repository, project, Python
   本人自己说的最后一句引文，条目被说得多的在前、再按日期新的在前，一个表达只出现一次，每句至多 120 字）。回复 `mode: general`，不引用资料。
 - `GET /api/persona/reflections` → `{closed}`；`POST /api/persona/reflections/{way}/close` `{conversation_id?}` → `{reply, closed}`：
   给了对话时依次存本人的“先到这里”和收尾的话（回复多 `reflection`），对话不存在 404，`ask` 等不能收起的 400；
-  `POST /api/persona/reflections/{way}/open` → `{closed}`。只给本人，冻结后写入 423。服务端不拒绝已收起用法的提问，收起只影响网页。
-
-## 预演（P2.6）
-
-- **接口**：沿用试问。`POST /api/persona/chat/stream` 体带 `preview: true` 和 `heir: "<heir_id>"`（最多 100 字），按继承人档
-  `heir:<heir_id>` 答：和这位继承人真去问时同一个检索、同一份遗嘱过滤、同一个不谈话题的拦截和危机护栏（`tests/test_will_preview.py`
-  核对两边给模型看的内容和引用一致）。和同事试问不同，`messages` 是页面送来的整段预演（最多 40 条），不谈话题的追问照样拦下。
-  只带 `heir` 不带 `preview` 400；非流式 `/api/persona/chat` 带 `preview` 照旧 400。
-- **谁能用**：只有本人（`web.handoffs.person`，和遗嘱接口一样；继承人、同事、访客 403）。遗嘱里没有这个编号（删掉了或不对）404
-  `找不到这位继承人，请刷新后重试`。记忆冻结后 423（个人版先被“冻结后只剩继承人入口”拦下，`heirs_only`；团队版 `memory_sealed`）：规格写的是“本人在世时”，冻结后遗嘱不能再改，预演也就没有用处；
-  在路由里拒绝（`lifecycle.refuse_if_sealed`），因为 `SealedMiddleware` 放过对话路径。拒绝都在调用模型之前。
-- **不留痕**：`persist=False`，不存会话、不写 `p_chat_log`、不生成转交、不改遗嘱、不冻结；没有账本、没有本人助手、`reach` 为 `none`、
-  不显示团队答案，`as_of` 不生效。
-- **没给他的**：`final` 多 `preview.withheld`（和同事试问同一格式：`id`、`facet`、`text` 前 60 字，最多 3 条）：同一问题在本人档的检索里
-  找到、这位继承人按遗嘱拿不到的条目（`heirs.usable_items`，含按词面命中不谈话题的）。检索跑不了时为空。危机护栏的回复没有 `preview`。
+  `POST /api/persona/reflections/{way}/open` → `{closed}`。只给本人。服务端不拒绝已收起用法的提问，收起只影响网页。
 
 ## 合成同意（P3.3）
 
@@ -124,42 +54,6 @@ Positioning: Identity → Memory upload → Service. Repository, project, Python
   （`render_audio` 和流式朗读都加，`stream_version` 为 2）；`MediaManifest.ai_generated` 一直为 true。视频画面右上角常驻 `SYNTHESIS_BADGE`“AI 合成”
   角标：插画视频逐帧画上，远端视频用 ffmpeg 叠上同一张角标；用本人声音时第一句前同样加那句话。网页舞台在用本人声音朗读时显示“AI 合成”，
   视频的标签和全屏标题旁也写“AI 合成”。
-
-## 继承人开启（P2.7）
-
-- `persona/heir_door.py`（代码层 4）。schema 10（`_MIGRATIONS` 第 10 条，`KernelVersion.schema` 随之为 10，不触发重新整理；升级前自动快照）加两张表：
-  `p_heir_sessions (hash TEXT PRIMARY KEY, heir_id TEXT NOT NULL, expires REAL NOT NULL)`：继承人会话，只存 cookie 里令牌的 SHA-256，
-  `expires` 是 Unix 秒（开启或进入后 `SESSION_SECONDS` = 12 小时），新建会话时顺手删掉过期的；
-  `p_heir_log (id INTEGER PRIMARY KEY AUTOINCREMENT, at, heir_id, event)`：`at` 为 UTC ISO 8601（到秒），`event` 是 `open`（第一次开启，冻结了记忆）、
-  `enter`（冻结后凭口令进入）或 `fail`（称呼或口令不对，`heir_id` 为空，不记填的是谁）；两个触发器拒绝 `UPDATE` / `DELETE`，只追加。
-  两张表都不在检索读的表里，写它们不改记忆版本；从冻结前的快照回退后，会话和开启记录一起回到快照那一刻。口令和令牌都不落盘、不进日志。
-- **开启**：`open_door(store, name, password, confirm, now)`。称呼按遗嘱里的称呼比较（忽略大小写和多余空格）；称呼不在遗嘱里时也对一份随机口令
-  的哈希算一次 scrypt，两种错误耗时相同、回答相同（`WrongWord`）。还没冻结时，称呼和口令都对但没有 `confirm`：返回 null，什么都不改；有 `confirm`：
-  `lifecycle.seal`（先快照）后建会话、记 `open`。已冻结时直接建会话、记 `enter`。过了 `retire_on` 的继承人照样能进入，读得到以前的对话（P2.8）。
-- **冷却**：从最后一次 `open` / `enter` 之后数 `fail`，连续 `MAX_TRIES` = 5 次起，最后一次错误后等 `FIRST_COOLDOWN` = 60 秒，之后每多错一次翻倍，
-  最长 `MAX_COOLDOWN` = 3600 秒；不分称呼（换着称呼猜一样计数）。冷却中不核对口令、不计数（对的口令也被拒）。计数从日志算，重启服务不清零。
-- **会话**：`session_at(db_path, token, now)` 只读打开分身库（不迁移），在记忆已冻结、会话没过期、遗嘱里仍有这位继承人时返回
-  `Session(heir_id, name, person)`（`person` 是 `identity:name`，可空）；否则 null。
-- **网页**（`web/heir_door.py`，挂在每个分身的应用里，经 `PersonaMiddleware` 进入；不在 `/api/persona` 下，冻结后照常可用，`tests/test_lifecycle.py` 归在 `OPEN`）：
-  - `POST /api/heir/open` `{name ≤64, password ≤128, confirm?: false}` → `{status: "confirm"}`（第一次开启，等确认）或
-    `{status: "open", heir: {id, name}, sealed_now}` 并设 cookie；称呼或口令不对 **400** `{"detail": "称呼或口令不对", "code": "heir_wrong"}`；
-    冷却中（包括这次错误让它开始冷却）**429** `{"detail": "试错太多次，请 N 分钟后再试", "code": "heir_cooldown", "retry_after": 秒}`，带 `Retry-After`。
-  - cookie `twin_heir` = `<分身编号>.<令牌>`，HttpOnly、SameSite=Strict、不设过期（关掉浏览器就没了；服务端 12 小时后失效），路径随
-    `X-Forwarded-Prefix`，HTTPS 时 Secure。
-  - `POST /api/heir/leave` → `{ok: true}`：删掉这个会话和 cookie。
-  - `HeirSessionMiddleware`（主应用里，登录之后、`HeirMiddleware` 之前）：cookie 打开一个活的会话时设 `scope["twin_heir"]`（继承人编号）、
-    `scope["twin_heir_persona"]`（`personas.HEIR_PERSONA_SCOPE`）和 `scope["twin_heir_view"]`（`auth.HEIR_VIEW`）；分身编号只认注册表里有的。
-    打不开任何东西的 cookie 什么都不改。`PersonaMiddleware` 对继承人的请求固定进他开启的分身，指名别的分身 403，`twin_person` 恒为 false。
-  - `GET /api/whoami` 对继承人多 `heir: {id, name, person, persona, gone}`，`admin` 为 false。
-  - `HEIR_ALLOWED` 加了 `GET /api/whoami`、`POST /api/heir/open`、`POST /api/heir/leave`；其余照 P2.4。
-- **前端**：`features/heir`。`whoami` 带 `heir` 时整个页面只有 `HeirChat`（标题“X 的记忆延续”，下面一行“不是 X 本人”；以前的对话、新对话、离开），
-  不读分身列表；本机存的“当前对话”等按 `twin.heir:<继承人>:<分身>:` 另存，和本人、别的继承人分开。个人版桌面侧栏底部一个 ghost 小按钮
-  “我是继承人”打开 `HeirDoor`。
-- **冻结后只剩继承人入口**：个人版里本人的分身（注册表的 `default`）冻结后，`HeirsOnlyMiddleware`（主应用里，在 `HeirSessionMiddleware` 之内）
-  对不是继承人的请求只放过 `/api/auth/*`、`GET /api/whoami`、`POST /api/heir/open`、`POST /api/heir/leave`，其余 `/api/` 都是
-  **423** `{"detail": "记忆已冻结，只有继承人能打开", "code": "heirs_only"}`（读和写都拒，包括遗嘱、预演、分身列表和设置）。
-  `GET /api/whoami` 多 `sealed: bool`（`heir_door.own_twin_sealed`，团队版恒为 false）；前端 `sealed` 且不是继承人时整页只有 `HeirsOnly`，
-  任何请求收到 `heirs_only` 时重读 `whoami`。团队版不变：冻结只拒写（`memory_sealed`）。
 
 ## Identity 与用户建档
 
@@ -286,26 +180,6 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
   `GET /api/persona/self-ratings` → `{labels, ratings: [{turn_id, question, reply, rating, rated_at, mode, as_of, reflection}]}`。
   都只给本人。`GET /api/conversations/{id}` 在本人档的对话里给标过的分身回答加 `self_rating`。本人对话的回答 payload
   在用了照镜子等用法时多一个 `reflection` 字段。存在 `p_meta` 的 `self_ratings`。
-- **数字遗嘱（P2.2）**：`persona/will.py`。schema 9（`_MIGRATIONS` 第 9 条，`KernelVersion.schema` 随之为 9，不触发重新整理；升级前自动快照）加两张表：
-  `p_will_heirs (heir_id TEXT PRIMARY KEY, json TEXT NOT NULL, secret TEXT NOT NULL)`：`json` 是 `Heir`
-  `{heir_id, name, relation, aspects, facets, avoid, voice, likeness, retire_on, farewell, created_at, updated_at}`，
-  `secret` 是开启口令的 `{"kdf": "scrypt", n, r, p, salt, hash}`（`hashlib.scrypt`，n=2^15、r=8、p=1、32 字节，16 字节随机盐，十六进制），
-  和 `json` 分开存、从不随继承人读出；口令本身不落盘、不进日志、不出现在任何返回值里。
-  `p_will_history (id INTEGER PRIMARY KEY AUTOINCREMENT, at, actor, action, heir_id, json)`：每次修改追加一行，
-  `action` 是 `add` / `update` / `remove` / `taxonomy`，`json` 是 `{changes, heirs}`：这次改了哪些字段（只换口令时是 `["password"]`）
-  和改完后整份遗嘱（不含口令哈希）；两个触发器拒绝对它 `UPDATE` / `DELETE`，只追加。
-  `aspects` 是整个方面（`D1`–`D10`），`facets` 是方面之外单独给的细项；`will.allowed_facets(heir)` 是两者展开后的细项集合，默认空：
-  遗嘱没写的什么都不给。`avoid` 是不谈的话题（去重，至多 20 条、每条 60 字）；`voice` / `likeness` 默认 false，P2 只存；
-  `retire_on` 可空（不退场）；`farewell` 可空（用默认告别）。同一份遗嘱里称呼不重复（P2.7 按称呼加口令开启）；口令 6–128 个字符。
-  分类升级时（`_migrate_taxonomy`）继承人的 `facets` 按 `TAXONOMY_MIGRATIONS` 改号：拆开的给全部新细项，删掉的不再给，记一行 `taxonomy`（`actor` 为 `twin`）。
-  核对口令用 `will.verify(store, heir_id, password)`（按存下的参数重算，`hmac.compare_digest` 比较；`will.matches(stored, password)` 是同一比较，供开启时对不存在的称呼也算一次）。
-  接口都只给本人（`web/handoffs.py` 的 `person`，别人 403），口令只在请求里出现：
-  `GET /api/persona/will` → `{heirs: [Heir], sealed}`（`sealed` 为 true 时记忆已冻结，遗嘱不能再改）；`POST /api/persona/will/heirs` `{name, relation?, aspects?, facets?, avoid?, voice?, likeness?, retire_on?, farewell?, password}`
-  → `{heir}`（没有口令或不合要求 400）；`PUT /api/persona/will/heirs/{heir_id}` 同样的字段整份重写，`password` 省略则保留原口令 → `{heir}`，找不到 404；
-  `DELETE /api/persona/will/heirs/{heir_id}` → `{ok: true}`，口令哈希一并删掉，历史里仍留着给过他什么；
-  `GET /api/persona/will/history` → `{changes: [{at, actor, action, heir_id, changes, heirs}]}`，从旧到新。`actor` 是本人的账号，没有账号时为 `self`。
-  冻结（P2.5）之后遗嘱的增改删和其他写入口一样返回 423：遗嘱停在本人留下的样子；读遗嘱和历史照常。
-  继承人按遗嘱得到什么见“继承人受众档（P2.4）”；界面（P2.3）另做。
 - **Time slice（P2.1）**：`ChatBody.as_of: date | None = None`（`YYYY-MM-DD`，网页选年份时取那年 12 月 31 日），
   `POST /api/persona/chat`、`/chat/stream`（含附件）只在本人自己的对话（`assistant`：本人档、本人、不是试问）里用，
   传给 `PersonaChat.reply` / `stream_reply` 的 `as_of`；别人的对话和试问忽略它，按现在答（回答的 `as_of` 为 null）。
@@ -493,6 +367,13 @@ def expression_view(store: PersonaStore, settings: Settings, *, source_id: str |
 - Removed archived biography eval payloads and their `decision/stance/voice/trap` type discriminator.
   Only the personal scenario and question input/expected/output contracts remain; old biography eval reports are
   no longer supported (this does not affect user databases).
+- Removed the digital will and everything after it: heirs and their tier (`heir:<id>`, `persona.heirs`), 预演,
+  the heirs' door (`persona.heir_door`, `/api/heir/*`, the `twin_heir` cookie), sealing (`persona.lifecycle`,
+  `SealedMiddleware`, `memory_sealed` / `heirs_only`, `whoami.sealed`), 退场 and its goodbye (`persona.retirement`,
+  `farewell`), `/api/persona/will*`, `twin eval-heirs`, and the front end's 数字遗嘱 and 我是继承人. Audiences are
+  `self` and `colleague` only; `persona.audience` keeps `usable_items` / `hidden_words`. The tables of schema 9 and 10
+  (`p_will_heirs`, `p_will_history`, `p_heir_sessions`, `p_heir_log`) stay as created and are never read or written;
+  a memory sealed before stays readable and is no longer refused writes. Snapshots named `-sealed` are pruned like any other.
 - Unused `[twin] k_principles/k_question_patterns/k_tradeoffs/k_stances/k_cases/k_directives`,
   `persona_principles`, `segment_window_chars` are not settings. Old/unknown keys are silently ignored,
   without warnings. CLI `persona coverage` remains with plain-language output.

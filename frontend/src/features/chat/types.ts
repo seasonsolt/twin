@@ -95,8 +95,6 @@ export interface ChatReply {
   crisis?: boolean;
   /** The way the person was talking with their own assistant when it answered (照镜子, 内在声音…). */
   reflection?: Reflection;
-  /** The twin said goodbye to an heir past their day to leave (P2.8), and answers them no more. */
-  farewell?: boolean;
   commitment?: PromiseLine;
   /** A lens's answer (a colleague asked the person's lens): statements with their basis, in place of the twin's words. */
   lens?: LensCardData;

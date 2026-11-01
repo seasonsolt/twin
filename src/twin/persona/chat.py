@@ -105,6 +105,11 @@ OWNER_SAID_TURNS = 4
 ITEMS_NS = "items"
 # A bracketed record id written into the reply text, with the space before it.
 INLINE_ID = re.compile(r"[ \t]*\[([A-Za-z]+_[0-9a-f]+(?:#\d+)?)\]")
+# The same ids written bare, as in "（2026-09-01，pi_5d59b2b96755）", with the separator before them.
+BARE_ID = re.compile(r"[ \t]*[，,、；;]?[ \t]*(?<![A-Za-z0-9_])([A-Za-z]+_[0-9a-f]+(?:#\d+)?)(?![A-Za-z0-9_#])")
+# Brackets left empty, or opening on a separator, once the ids in them are taken out.
+EMPTY_BRACKETS = re.compile(r"[ \t]*(?:（\s*）|\(\s*\)|\[\s*\])")
+BRACKET_SEPARATOR = re.compile(r"([（(])\s*[，,、；;]\s*")
 EXPRESSIONS_NS = "expressions"
 OTHERS_NS = "others"
 VECTOR_NAMESPACES = (ITEMS_NS, EXPRESSIONS_NS, OTHERS_NS)
@@ -1461,6 +1466,11 @@ class PersonaChat:
         inline = [m.group(1) for m in INLINE_ID.finditer(text) if m.group(1) in ctx.ids]
         if inline:
             text = INLINE_ID.sub(lambda m: "" if m.group(1) in ctx.ids else m.group(0), text).strip()
+        bare = [m.group(1) for m in BARE_ID.finditer(text) if m.group(1) in ctx.ids]
+        if bare:
+            text = BARE_ID.sub(lambda m: "" if m.group(1) in ctx.ids else m.group(0), text)
+            text = EMPTY_BRACKETS.sub("", BRACKET_SEPARATOR.sub(r"\1", text)).strip()
+            inline += bare
         # Nothing to show is a missed answer, never a blank bubble: say so honestly in the asker's language.
         empty = not text.strip()
         if empty:

@@ -830,6 +830,16 @@ def test_record_ids_written_into_the_reply_move_to_citations(store: PersonaStore
     assert reply.citations == [item_id]
 
 
+def test_record_ids_written_bare_are_taken_out_too(store: PersonaStore, settings: Settings) -> None:
+    item_id = store.list_items("2.1")[0].item_id
+    text = f"三个孩子（2026-09-01，{item_id}）。（{item_id}）还有（{item_id}，那年）。pi_000000000000 留着。"
+    draft = number_draft(reply=text, citations=[], mode="grounded")
+    chat = pc.PersonaChat(store, FakeLLM(lambda *a: draft), HashingEmbedder(), settings)
+    reply = chat.reply([ChatTurn(role="user", content="你有几个孩子？")], persist=False)
+    assert reply.reply == "三个孩子（2026-09-01）。还有（那年）。pi_000000000000 留着。"
+    assert reply.citations == [item_id]
+
+
 def test_prompt_speaks_as_the_person_at_every_boundary() -> None:
     """The twin is the person in the conversation: a gap, a promise it will not make, a person it will not judge and
     general know-how are all said the way the person would say them, never as an assistant referring to them."""

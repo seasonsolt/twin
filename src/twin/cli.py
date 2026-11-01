@@ -2124,6 +2124,46 @@ def eval_heirs_command(
     _say(json.dumps(summary, ensure_ascii=False, indent=2))
 
 
+@app.command("eval-voice")
+def eval_voice_command(
+    ctx: typer.Context,
+    out: Annotated[Path, typer.Option("--out", help="仓库外的评测目录")],
+    repeats: Annotated[int, typer.Option("--repeats", min=1, help="每题问几次")] = 3,
+    workers: Annotated[int, typer.Option("--workers", min=1, help="同时问几题")] = 4,
+    allow_in_repo: Annotated[bool, typer.Option("--allow-in-repo")] = False,
+) -> None:
+    """内在声音评测：在一位虚构的人物上，测内在声音会不会下指令、替本人做决定、说出本人没说过的原则。"""
+    from .evals.extraction import same_model, served_model
+    from .evals.harness import Judge
+    from .evals.personal import ensure_output_directory
+    from .evals.voice import run, write
+
+    with _errors():
+        ensure_output_directory(out, allow_in_repo=allow_in_repo)
+        settings = _benchmark_settings(ctx, keep_judges=True)
+        if not settings.judges:
+            raise ValueError("配置里没有 [[judges]]；评委要和被测的 [llm] 分开配置")
+        llm = make_llm(settings.llm, "llm")
+        served = served_model(llm)
+        if served is not None and not same_model(settings.llm.model or "", served):
+            raise ValueError(f"服务端返回的模型 {served} 与配置的 {settings.llm.model} 不一致")
+        judges = [
+            (f"j{i}:{config.model}", Judge(make_llm(config, f"judges[{i}]"), config.effort_twin))
+            for i, config in enumerate(settings.judges)
+        ]
+        embedder = make_embedder(settings.embed)
+        records, summary = run(llm, embedder, settings, judges, repeats=repeats, workers=workers, progress=_progress)
+        meta = {
+            "model": settings.llm.model,
+            "served": served,
+            "embedder": settings.embed.model or settings.embed.provider,
+            "judges": [judge_id for judge_id, _ in judges],
+            "repeats": repeats,
+        }
+        write(out, records, summary, meta)
+    _say(json.dumps(summary, ensure_ascii=False, indent=2))
+
+
 @app.command("eval-crisis")
 def eval_crisis_command(
     ctx: typer.Context,

@@ -436,12 +436,16 @@ def create_app(
     # make it into the team database are made.
     run_all(desks)
     hub = WeComHub(settings, registry, backends, jobs)
-    photos = wecom_photos(settings, registry)
+    # WeCom is the team's (``system.TEAM_PATHS``): in the persona edition no bot connects and no photo is fetched,
+    # whatever a twin was bound to before.
+    team_edition = settings.product.edition == "team"
+    photos = wecom_photos(settings, registry) if team_edition else None
     registry.on_removed = lambda persona_id: anyio.from_thread.run(hub.persona_removed, persona_id)
 
     def restored(persona_id: str) -> None:
         run_all([desk_for(persona_id)])
-        anyio.from_thread.run(hub.persona_restored, persona_id)
+        if team_edition:
+            anyio.from_thread.run(hub.persona_restored, persona_id)
 
     registry.on_restored = restored
     app.state.channels = hub
@@ -705,7 +709,8 @@ def create_app(
                     continue
                 context = registry.application(entry["id"])
                 await stack.enter_async_context(context.router.lifespan_context(context))
-            await hub.start()
+            if team_edition:
+                await hub.start()
             if photos is not None:
                 photos.start()
             monitor.start()

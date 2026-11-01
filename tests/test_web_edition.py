@@ -94,3 +94,23 @@ def test_the_team_edition_keeps_everything(tmp_path: Path) -> None:
     assert whoami["features"] == {"work": True, "ledger": True}
     for path in ("/api/library", "/api/persona/handoffs/count", "/api/persona/work", "/api/channels"):
         assert client.get(path).status_code == 200, path
+
+
+@pytest.mark.parametrize("edition", ["persona", "team"])
+def test_wecom_connects_and_fetches_photos_only_in_the_team_edition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, edition: str
+) -> None:
+    started: list[str] = []
+
+    async def start(self: object) -> None:
+        started.append("bot")
+
+    def photos(settings: Settings, registry: object) -> None:
+        started.append("photos")
+
+    monkeypatch.setattr("twin.web.app.WeComHub.start", start)
+    monkeypatch.setattr("twin.web.app.wecom_photos", photos)
+    settings = Settings(db_path=tmp_path / "twin.db", product=ProductSettings(edition=edition))  # type: ignore[arg-type]
+    with client_for(settings):
+        pass
+    assert started == ([] if edition == "persona" else ["photos", "bot"])
